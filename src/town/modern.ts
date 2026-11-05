@@ -4505,7 +4505,7 @@ function streetAxis(c: Ctx, ring: Pt[]): number {
  *   · 进深超过 `maxDepth` 就横切一刀 → 后排地块（有后巷接进来）；
  *   · 每个切点可以带 ±15% 的抖动，避免全城是尺规画出来的方格。
  */
-function frontagePartition(
+export function frontagePartition(
   ring: Pt[],
   o: {
     /** 沿街面宽（u） */
@@ -4734,7 +4734,7 @@ function pickParcelPattern(c: Ctx): ParcelPattern {
   return 'ortho';
 }
 
-function tensorPartition(
+export function tensorPartition(
   ring: Pt[],
   opts: {
     targetA: number;

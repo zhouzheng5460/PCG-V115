@@ -1,0 +1,1769 @@
+{
+ "generatedAt": "2026-11-05T15:00:49.416Z",
+ "sites": [
+  {
+   "site": "R01",
+   "typology": "multi_family",
+   "chosen": "S0·street-front-offset",
+   "weights": [
+    {
+     "factor": 0,
+     "label": "道路成本不计",
+     "top": "S1·street-front-offset",
+     "topScore": 1.3692,
+     "topFeasible": false,
+     "order": "S1·street-front-offset:1.369 > S1·recursive-obb:1.365 > S0·street-front-offset:1.329 > S0·recursive-obb:0.931"
+    },
+    {
+     "factor": 0.5,
+     "label": "道路成本减半",
+     "top": "S1·street-front-offset",
+     "topScore": 1.3357,
+     "topFeasible": false,
+     "order": "S1·street-front-offset:1.336 > S1·recursive-obb:1.331 > S0·street-front-offset:1.329 > S0·recursive-obb:0.931"
+    },
+    {
+     "factor": 1,
+     "label": "现行",
+     "top": "S0·street-front-offset",
+     "topScore": 1.3289,
+     "topFeasible": true,
+     "order": "S0·street-front-offset:1.329 > S1·street-front-offset:1.302 > S1·recursive-obb:1.298 > S0·recursive-obb:0.931"
+    },
+    {
+     "factor": 2,
+     "label": "道路成本加倍",
+     "top": "S0·street-front-offset",
+     "topScore": 1.3289,
+     "topFeasible": true,
+     "order": "S0·street-front-offset:1.329 > S1·street-front-offset:1.235 > S1·recursive-obb:1.231 > S0·recursive-obb:0.931"
+    }
+   ],
+   "obbVsOffset": [
+    {
+     "sk": "S0",
+     "off": {
+      "score": 1.3289,
+      "frontage": 0.3191,
+      "parcels": 6,
+      "dem": true
+     },
+     "obb": {
+      "score": 0.9312,
+      "frontage": 0.4592,
+      "parcels": 1,
+      "dem": true
+     },
+     "delta": 0.398,
+     "deltaFrontage": -0.14
+    },
+    {
+     "sk": "S1",
+     "off": {
+      "score": 1.3023,
+      "frontage": 0.3594,
+      "parcels": 6,
+      "dem": false
+     },
+     "obb": {
+      "score": 1.298,
+      "frontage": 0.4009,
+      "parcels": 4,
+      "dem": false
+     },
+     "delta": 0.004,
+     "deltaFrontage": -0.041
+    }
+   ],
+   "winnerDemand": {
+    "ok": true,
+    "items": [
+     {
+      "code": "D1",
+      "label": "主入口经连续通行面接入公共道路",
+      "ok": true,
+      "detail": "18 樘主入口全部连通（平均离通行面 0.01 m）"
+     },
+     {
+      "code": "D2",
+      "label": "服务/货运入口有对应路径",
+      "ok": true,
+      "detail": "全部服务入口可经通行面接出"
+     },
+     {
+      "code": "D3",
+      "label": "停车：车位→通道→场内道→出入口→道路",
+      "ok": true,
+      "detail": "2 处停车链路完整"
+     },
+     {
+      "code": "D4",
+      "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+      "ok": true,
+      "detail": "本方案无装卸区"
+     },
+     {
+      "code": "D5",
+      "label": "主要公共空间（≥300 m²）有连续步行接入",
+      "ok": true,
+      "detail": "4 处公共空间全部可达"
+     },
+     {
+      "code": "D6",
+      "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+      "ok": true,
+      "detail": "最窄通行面净宽 2.4 m"
+     }
+    ],
+    "failed": [],
+    "stats": {
+     "buildings": 18,
+     "doorsChecked": 18,
+     "doorsReachable": 18,
+     "meanDoorGapM": 0.01,
+     "parkChains": 2,
+     "parkChainsOk": 2,
+     "publicSpaces": 4,
+     "publicSpacesReachable": 4,
+     "minWalkWidthM": 2.4,
+     "loadingRadiusM": -1
+    }
+   },
+   "cands": [
+    {
+     "id": "S0·street-front-offset",
+     "sk": "S0",
+     "st": "street-front-offset",
+     "score": 1.3289,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": 0
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.3191
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0.0098
+      }
+     ],
+     "metrics": {
+      "roadM2": 0,
+      "roadShare": 0,
+      "parcels": 6,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.6382,
+      "fragmentShare": 0,
+      "compoundM2": 1201.7
+     },
+     "reason": "地块 6 块（1 个分块，最大 29%）· 道路 0 m²（0.0%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 64% · 残片 0.0% · 组团 7%",
+     "rejected": null,
+     "built": {
+      "parcels": 6,
+      "buildings": 18,
+      "coverage": 33.9,
+      "roadM2": 0,
+      "stalls": 32,
+      "greenShare": 51.5,
+      "frontageContinuity": 76,
+      "doorReachM": 11.9
+     },
+     "demand": {
+      "ok": true,
+      "failed": [],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "18 樘主入口全部连通（平均离通行面 0.01 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "2 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "本方案无装卸区"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "4 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 2.4 m"
+       }
+      ],
+      "stats": {
+       "buildings": 18,
+       "doorsChecked": 18,
+       "doorsReachable": 18,
+       "meanDoorGapM": 0.01,
+       "parkChains": 2,
+       "parkChainsOk": 2,
+       "publicSpaces": 4,
+       "publicSpacesReachable": 4,
+       "minWalkWidthM": 2.4,
+       "loadingRadiusM": -1
+      }
+     }
+    },
+    {
+     "id": "S1·street-front-offset",
+     "sk": "S1",
+     "st": "street-front-offset",
+     "score": 1.3023,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": -0.0669
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.3594
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0.0098
+      }
+     ],
+     "metrics": {
+      "roadM2": 1027.6,
+      "roadShare": 0.0557,
+      "parcels": 6,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.7187,
+      "fragmentShare": 0,
+      "compoundM2": 1201.7
+     },
+     "reason": "地块 6 块（1 个分块，最大 29%）· 道路 1028 m²（5.6%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 72% · 残片 0.0% · 组团 7%",
+     "rejected": null,
+     "built": {
+      "parcels": 6,
+      "buildings": 13,
+      "coverage": 26.7,
+      "roadM2": 1027.6,
+      "stalls": 32,
+      "greenShare": 45.2,
+      "frontageContinuity": 65,
+      "doorReachM": 9.1
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D5",
+       "D6"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "13 樘主入口全部连通（平均离通行面 0.01 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "2 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "本方案无装卸区"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": false,
+        "detail": "1/4 处不可达：green1908m²"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": false,
+        "detail": "最窄通行面净宽 1.4 m"
+       }
+      ],
+      "stats": {
+       "buildings": 13,
+       "doorsChecked": 13,
+       "doorsReachable": 13,
+       "meanDoorGapM": 0.01,
+       "parkChains": 2,
+       "parkChainsOk": 2,
+       "publicSpaces": 4,
+       "publicSpacesReachable": 3,
+       "minWalkWidthM": 1.4,
+       "loadingRadiusM": -1
+      }
+     }
+    },
+    {
+     "id": "S1·recursive-obb",
+     "sk": "S1",
+     "st": "recursive-obb",
+     "score": 1.298,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": -0.0669
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.4009
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": -0.0361
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 1027.6,
+      "roadShare": 0.0557,
+      "parcels": 4,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.8019,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 4 块（1 个分块，最大 39%）· 道路 1028 m²（5.6%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 80% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 4,
+      "buildings": 13,
+      "coverage": 30.3,
+      "roadM2": 1027.6,
+      "stalls": 19,
+      "greenShare": 56.9,
+      "frontageContinuity": 78,
+      "doorReachM": 8.1
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D5",
+       "D6"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "13 樘主入口全部连通（平均离通行面 0.01 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "1 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "本方案无装卸区"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": false,
+        "detail": "2/3 处不可达：green4649m² green3707m²"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": false,
+        "detail": "最窄通行面净宽 1.3 m"
+       }
+      ],
+      "stats": {
+       "buildings": 13,
+       "doorsChecked": 13,
+       "doorsReachable": 13,
+       "meanDoorGapM": 0.01,
+       "parkChains": 1,
+       "parkChainsOk": 1,
+       "publicSpaces": 3,
+       "publicSpacesReachable": 1,
+       "minWalkWidthM": 1.3,
+       "loadingRadiusM": -1
+      }
+     }
+    },
+    {
+     "id": "S0·recursive-obb",
+     "sk": "S0",
+     "st": "recursive-obb",
+     "score": 0.9312,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": 0
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.4592
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": -0.528
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 0,
+      "roadShare": 0,
+      "parcels": 1,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.9185,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 1 块（1 个分块，最大 100%）· 道路 0 m²（0.0%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 92% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 1,
+      "buildings": 5,
+      "coverage": 13.7,
+      "roadM2": 0,
+      "stalls": 0,
+      "greenShare": 0.2,
+      "frontageContinuity": 58,
+      "doorReachM": 21
+     },
+     "demand": {
+      "ok": true,
+      "failed": [],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "5 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "无集中停车（本方案未设停车地块）"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "本方案无装卸区"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "无 ≥300 m² 的公共空间"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 2.3 m"
+       }
+      ],
+      "stats": {
+       "buildings": 5,
+       "doorsChecked": 5,
+       "doorsReachable": 5,
+       "meanDoorGapM": 0,
+       "parkChains": 0,
+       "parkChainsOk": 0,
+       "publicSpaces": 0,
+       "publicSpacesReachable": 0,
+       "minWalkWidthM": 2.3,
+       "loadingRadiusM": -1
+      }
+     }
+    }
+   ]
+  },
+  {
+   "site": "C01",
+   "typology": "retail",
+   "chosen": "S0·street-front-offset",
+   "weights": [
+    {
+     "factor": 0,
+     "label": "道路成本不计",
+     "top": "S2·recursive-obb",
+     "topScore": 1.4099,
+     "topFeasible": true,
+     "order": "S2·recursive-obb:1.410 > S2·street-front-offset:1.400 > S1·recursive-obb:1.380 > S1·street-front-offset:1.336 > S0·street-front-offset:1.238 > S0·recursive-obb:1.175"
+    },
+    {
+     "factor": 0.5,
+     "label": "道路成本减半",
+     "top": "S2·recursive-obb",
+     "topScore": 1.3142,
+     "topFeasible": true,
+     "order": "S2·recursive-obb:1.314 > S1·recursive-obb:1.306 > S2·street-front-offset:1.305 > S1·street-front-offset:1.261 > S0·street-front-offset:1.238 > S0·recursive-obb:1.175"
+    },
+    {
+     "factor": 1,
+     "label": "现行",
+     "top": "S0·street-front-offset",
+     "topScore": 1.238,
+     "topFeasible": false,
+     "order": "S0·street-front-offset:1.238 > S1·recursive-obb:1.231 > S2·recursive-obb:1.219 > S2·street-front-offset:1.209 > S1·street-front-offset:1.186 > S0·recursive-obb:1.175"
+    },
+    {
+     "factor": 2,
+     "label": "道路成本加倍",
+     "top": "S0·street-front-offset",
+     "topScore": 1.238,
+     "topFeasible": false,
+     "order": "S0·street-front-offset:1.238 > S0·recursive-obb:1.175 > S1·recursive-obb:1.081 > S1·street-front-offset:1.037 > S2·recursive-obb:1.027 > S2·street-front-offset:1.018"
+    }
+   ],
+   "obbVsOffset": [
+    {
+     "sk": "S0",
+     "off": {
+      "score": 1.238,
+      "frontage": 0.1879,
+      "parcels": 16,
+      "dem": false
+     },
+     "obb": {
+      "score": 1.1755,
+      "frontage": 0.1755,
+      "parcels": 10,
+      "dem": false
+     },
+     "delta": 0.063,
+     "deltaFrontage": 0.012
+    },
+    {
+     "sk": "S1",
+     "off": {
+      "score": 1.1863,
+      "frontage": 0.316,
+      "parcels": 18,
+      "dem": false
+     },
+     "obb": {
+      "score": 1.231,
+      "frontage": 0.3804,
+      "parcels": 9,
+      "dem": true
+     },
+     "delta": -0.045,
+     "deltaFrontage": -0.064
+    },
+    {
+     "sk": "S2",
+     "off": {
+      "score": 1.209,
+      "frontage": 0.3849,
+      "parcels": 18,
+      "dem": false
+     },
+     "obb": {
+      "score": 1.2186,
+      "frontage": 0.4099,
+      "parcels": 9,
+      "dem": true
+     },
+     "delta": -0.01,
+     "deltaFrontage": -0.025
+    }
+   ],
+   "winnerDemand": {
+    "ok": false,
+    "items": [
+     {
+      "code": "D1",
+      "label": "主入口经连续通行面接入公共道路",
+      "ok": true,
+      "detail": "13 樘主入口全部连通（平均离通行面 0 m）"
+     },
+     {
+      "code": "D2",
+      "label": "服务/货运入口有对应路径",
+      "ok": true,
+      "detail": "全部服务入口可经通行面接出"
+     },
+     {
+      "code": "D3",
+      "label": "停车：车位→通道→场内道→出入口→道路",
+      "ok": true,
+      "detail": "1 处停车链路完整"
+     },
+     {
+      "code": "D4",
+      "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+      "ok": true,
+      "detail": "最大可回转半径 6.8 m（1 处装卸区）"
+     },
+     {
+      "code": "D5",
+      "label": "主要公共空间（≥300 m²）有连续步行接入",
+      "ok": true,
+      "detail": "2 处公共空间全部可达"
+     },
+     {
+      "code": "D6",
+      "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+      "ok": false,
+      "detail": "整块地没有任何成规模的步行/车行通道面（只有贴建筑的零碎铺装）"
+     }
+    ],
+    "failed": [
+     "D6"
+    ],
+    "stats": {
+     "buildings": 13,
+     "doorsChecked": 13,
+     "doorsReachable": 13,
+     "meanDoorGapM": 0,
+     "parkChains": 1,
+     "parkChainsOk": 1,
+     "publicSpaces": 2,
+     "publicSpacesReachable": 2,
+     "minWalkWidthM": 0,
+     "loadingRadiusM": 6.8
+    }
+   },
+   "cands": [
+    {
+     "id": "S0·street-front-offset",
+     "sk": "S0",
+     "st": "street-front-offset",
+     "score": 1.238,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": 0
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.1879
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0.0501
+      }
+     ],
+     "metrics": {
+      "roadM2": 0,
+      "roadShare": 0,
+      "parcels": 16,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.3758,
+      "fragmentShare": 0,
+      "compoundM2": 4618.1
+     },
+     "reason": "地块 16 块（1 个分块，最大 33%）· 道路 0 m²（0.0%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 38% · 残片 0.0% · 组团 33%",
+     "rejected": null,
+     "built": {
+      "parcels": 16,
+      "buildings": 13,
+      "coverage": 37.1,
+      "roadM2": 0,
+      "stalls": 16,
+      "greenShare": 21.3,
+      "frontageContinuity": 89,
+      "doorReachM": 2
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D6"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "13 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "1 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "最大可回转半径 6.8 m（1 处装卸区）"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "2 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": false,
+        "detail": "整块地没有任何成规模的步行/车行通道面（只有贴建筑的零碎铺装）"
+       }
+      ],
+      "stats": {
+       "buildings": 13,
+       "doorsChecked": 13,
+       "doorsReachable": 13,
+       "meanDoorGapM": 0,
+       "parkChains": 1,
+       "parkChainsOk": 1,
+       "publicSpaces": 2,
+       "publicSpacesReachable": 2,
+       "minWalkWidthM": 0,
+       "loadingRadiusM": 6.8
+      }
+     }
+    },
+    {
+     "id": "S1·recursive-obb",
+     "sk": "S1",
+     "st": "recursive-obb",
+     "score": 1.231,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": -0.1495
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.3804
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 1721.3,
+      "roadShare": 0.1246,
+      "parcels": 9,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.7609,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 9 块（1 个分块，最大 29%）· 道路 1721 m²（12.5%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 76% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 9,
+      "buildings": 11,
+      "coverage": 23.1,
+      "roadM2": 1721.3,
+      "stalls": 28,
+      "greenShare": 0,
+      "frontageContinuity": 62,
+      "doorReachM": 2.8
+     },
+     "demand": {
+      "ok": true,
+      "failed": [],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "11 樘主入口全部连通（平均离通行面 0.01 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "2 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "最大可回转半径 8.4 m（1 处装卸区）"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "1 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 3.3 m"
+       }
+      ],
+      "stats": {
+       "buildings": 11,
+       "doorsChecked": 11,
+       "doorsReachable": 11,
+       "meanDoorGapM": 0.01,
+       "parkChains": 2,
+       "parkChainsOk": 2,
+       "publicSpaces": 1,
+       "publicSpacesReachable": 1,
+       "minWalkWidthM": 3.3,
+       "loadingRadiusM": 8.4
+      }
+     }
+    },
+    {
+     "id": "S2·recursive-obb",
+     "sk": "S2",
+     "st": "recursive-obb",
+     "score": 1.2186,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": -0.1913
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.4099
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 2202.9,
+      "roadShare": 0.1594,
+      "parcels": 9,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.8198,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 9 块（1 个分块，最大 23%）· 道路 2203 m²（15.9%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 82% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 9,
+      "buildings": 10,
+      "coverage": 20.8,
+      "roadM2": 2202.9,
+      "stalls": 23,
+      "greenShare": 0,
+      "frontageContinuity": 58,
+      "doorReachM": 2.9
+     },
+     "demand": {
+      "ok": true,
+      "failed": [],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "10 樘主入口全部连通（平均离通行面 0.01 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "2 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "最大可回转半径 8.4 m（1 处装卸区）"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "1 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 5.5 m"
+       }
+      ],
+      "stats": {
+       "buildings": 10,
+       "doorsChecked": 10,
+       "doorsReachable": 10,
+       "meanDoorGapM": 0.01,
+       "parkChains": 2,
+       "parkChainsOk": 2,
+       "publicSpaces": 1,
+       "publicSpacesReachable": 1,
+       "minWalkWidthM": 5.5,
+       "loadingRadiusM": 8.4
+      }
+     }
+    },
+    {
+     "id": "S2·street-front-offset",
+     "sk": "S2",
+     "st": "street-front-offset",
+     "score": 1.209,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": -0.1913
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.3849
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0.0154
+      }
+     ],
+     "metrics": {
+      "roadM2": 2202.9,
+      "roadShare": 0.1594,
+      "parcels": 18,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.7697,
+      "fragmentShare": 0,
+      "compoundM2": 1416.5
+     },
+     "reason": "地块 18 块（1 个分块，最大 8%）· 道路 2203 m²（15.9%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 77% · 残片 0.0% · 组团 10%",
+     "rejected": null,
+     "built": {
+      "parcels": 18,
+      "buildings": 13,
+      "coverage": 28,
+      "roadM2": 2202.9,
+      "stalls": 31,
+      "greenShare": 0,
+      "frontageContinuity": 68,
+      "doorReachM": 1.8
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D3"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "13 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": false,
+        "detail": "1/2 处链路断裂：176_176·S2/off/18(通道 4/4,车道未接路)"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "最大可回转半径 7.7 m（1 处装卸区）"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "1 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 4.3 m"
+       }
+      ],
+      "stats": {
+       "buildings": 13,
+       "doorsChecked": 13,
+       "doorsReachable": 13,
+       "meanDoorGapM": 0,
+       "parkChains": 2,
+       "parkChainsOk": 1,
+       "publicSpaces": 1,
+       "publicSpacesReachable": 1,
+       "minWalkWidthM": 4.3,
+       "loadingRadiusM": 7.7
+      }
+     }
+    },
+    {
+     "id": "S1·street-front-offset",
+     "sk": "S1",
+     "st": "street-front-offset",
+     "score": 1.1863,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": -0.1495
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.316
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": -0.0041
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0.0238
+      }
+     ],
+     "metrics": {
+      "roadM2": 1721.3,
+      "roadShare": 0.1246,
+      "parcels": 18,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.6321,
+      "fragmentShare": 0.0068,
+      "compoundM2": 2190.8
+     },
+     "reason": "地块 18 块（1 个分块，最大 16%）· 道路 1721 m²（12.5%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 63% · 残片 0.7% · 组团 16%",
+     "rejected": null,
+     "built": {
+      "parcels": 18,
+      "buildings": 12,
+      "coverage": 25.6,
+      "roadM2": 1721.3,
+      "stalls": 40,
+      "greenShare": 0,
+      "frontageContinuity": 64,
+      "doorReachM": 2.2
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D3"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "12 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": false,
+        "detail": "1/1 处链路断裂：176_176·S1/off/18(通道 6/6,车道未接路)"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "最大可回转半径 8.7 m（1 处装卸区）"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "1 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 3.8 m"
+       }
+      ],
+      "stats": {
+       "buildings": 12,
+       "doorsChecked": 12,
+       "doorsReachable": 12,
+       "meanDoorGapM": 0,
+       "parkChains": 1,
+       "parkChainsOk": 0,
+       "publicSpaces": 1,
+       "publicSpacesReachable": 1,
+       "minWalkWidthM": 3.8,
+       "loadingRadiusM": 8.7
+      }
+     }
+    },
+    {
+     "id": "S0·recursive-obb",
+     "sk": "S0",
+     "st": "recursive-obb",
+     "score": 1.1755,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": 0
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.1755
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 34% 的部分)",
+       "v": 0
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 0,
+      "roadShare": 0,
+      "parcels": 10,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.351,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 10 块（1 个分块，最大 31%）· 道路 0 m²（0.0%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 35% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 10,
+      "buildings": 14,
+      "coverage": 39.2,
+      "roadM2": 0,
+      "stalls": 26,
+      "greenShare": 0,
+      "frontageContinuity": 75,
+      "doorReachM": 3.6
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D3"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "14 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": false,
+        "detail": "1/2 处链路断裂：176_176·S0/obb/6(通道 0/1,车道未接路)"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 4 m）",
+        "ok": true,
+        "detail": "最大可回转半径 9.2 m（1 处装卸区）"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "1 处公共空间全部可达"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": true,
+        "detail": "最窄通行面净宽 4.7 m"
+       }
+      ],
+      "stats": {
+       "buildings": 14,
+       "doorsChecked": 14,
+       "doorsReachable": 14,
+       "meanDoorGapM": 0,
+       "parkChains": 2,
+       "parkChainsOk": 1,
+       "publicSpaces": 1,
+       "publicSpacesReachable": 1,
+       "minWalkWidthM": 4.7,
+       "loadingRadiusM": 9.2
+      }
+     }
+    }
+   ]
+  },
+  {
+   "site": "I01",
+   "typology": "industrial",
+   "chosen": "S0·street-front-offset",
+   "weights": [
+    {
+     "factor": 0,
+     "label": "道路成本不计",
+     "top": "S0·street-front-offset",
+     "topScore": 0.97,
+     "topFeasible": false,
+     "order": "S0·street-front-offset:0.970 > S0·recursive-obb:0.772"
+    },
+    {
+     "factor": 0.5,
+     "label": "道路成本减半",
+     "top": "S0·street-front-offset",
+     "topScore": 0.97,
+     "topFeasible": false,
+     "order": "S0·street-front-offset:0.970 > S0·recursive-obb:0.772"
+    },
+    {
+     "factor": 1,
+     "label": "现行",
+     "top": "S0·street-front-offset",
+     "topScore": 0.97,
+     "topFeasible": false,
+     "order": "S0·street-front-offset:0.970 > S0·recursive-obb:0.772"
+    },
+    {
+     "factor": 2,
+     "label": "道路成本加倍",
+     "top": "S0·street-front-offset",
+     "topScore": 0.97,
+     "topFeasible": false,
+     "order": "S0·street-front-offset:0.970 > S0·recursive-obb:0.772"
+    }
+   ],
+   "obbVsOffset": [
+    {
+     "sk": "S0",
+     "off": {
+      "score": 0.97,
+      "frontage": 0.2215,
+      "parcels": 2,
+      "dem": false
+     },
+     "obb": {
+      "score": 0.7719,
+      "frontage": 0.2039,
+      "parcels": 1,
+      "dem": false
+     },
+     "delta": 0.198,
+     "deltaFrontage": 0.018
+    }
+   ],
+   "winnerDemand": {
+    "ok": false,
+    "items": [
+     {
+      "code": "D1",
+      "label": "主入口经连续通行面接入公共道路",
+      "ok": true,
+      "detail": "2 樘主入口全部连通（平均离通行面 0 m）"
+     },
+     {
+      "code": "D2",
+      "label": "服务/货运入口有对应路径",
+      "ok": true,
+      "detail": "全部服务入口可经通行面接出"
+     },
+     {
+      "code": "D3",
+      "label": "停车：车位→通道→场内道→出入口→道路",
+      "ok": true,
+      "detail": "1 处停车链路完整"
+     },
+     {
+      "code": "D4",
+      "label": "装卸/回转区满足车型（内切半径 ≥ 5.5 m）",
+      "ok": false,
+      "detail": "工业地块没有任何装卸区 —— 不可行"
+     },
+     {
+      "code": "D5",
+      "label": "主要公共空间（≥300 m²）有连续步行接入",
+      "ok": false,
+      "detail": "1/1 处不可达：green1557m²"
+     },
+     {
+      "code": "D6",
+      "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+      "ok": false,
+      "detail": "整块地没有任何成规模的步行/车行通道面（只有贴建筑的零碎铺装）"
+     }
+    ],
+    "failed": [
+     "D4",
+     "D5",
+     "D6"
+    ],
+    "stats": {
+     "buildings": 2,
+     "doorsChecked": 2,
+     "doorsReachable": 2,
+     "meanDoorGapM": 0,
+     "parkChains": 1,
+     "parkChainsOk": 1,
+     "publicSpaces": 1,
+     "publicSpacesReachable": 0,
+     "minWalkWidthM": 0,
+     "loadingRadiusM": -1
+    }
+   },
+   "cands": [
+    {
+     "id": "S0·street-front-offset",
+     "sk": "S0",
+     "st": "street-front-offset",
+     "score": 0.97,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": 0
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.2215
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 46% 的部分)",
+       "v": -0.2515
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 0,
+      "roadShare": 0,
+      "parcels": 2,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.443,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 2 块（1 个分块，最大 77%）· 道路 0 m²（0.0%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 44% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 2,
+      "buildings": 2,
+      "coverage": 37.7,
+      "roadM2": 0,
+      "stalls": 8,
+      "greenShare": 38.9,
+      "frontageContinuity": 66,
+      "doorReachM": 6.3
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D4",
+       "D5",
+       "D6"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "2 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "1 处停车链路完整"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 5.5 m）",
+        "ok": false,
+        "detail": "工业地块没有任何装卸区 —— 不可行"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": false,
+        "detail": "1/1 处不可达：green1557m²"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": false,
+        "detail": "整块地没有任何成规模的步行/车行通道面（只有贴建筑的零碎铺装）"
+       }
+      ],
+      "stats": {
+       "buildings": 2,
+       "doorsChecked": 2,
+       "doorsReachable": 2,
+       "meanDoorGapM": 0,
+       "parkChains": 1,
+       "parkChainsOk": 1,
+       "publicSpaces": 1,
+       "publicSpacesReachable": 0,
+       "minWalkWidthM": 0,
+       "loadingRadiusM": -1
+      }
+     }
+    },
+    {
+     "id": "S0·recursive-obb",
+     "sk": "S0",
+     "st": "recursive-obb",
+     "score": 0.7719,
+     "terms": [
+      {
+       "k": "通达 1.0×(1-无接入占比)",
+       "v": 1
+      },
+      {
+       "k": "道路占地 -1.2×",
+       "v": 0
+      },
+      {
+       "k": "白铺道路 -1.0×",
+       "v": 0
+      },
+      {
+       "k": "临街率 +0.5×",
+       "v": 0.2039
+      },
+      {
+       "k": "残片 -0.6×",
+       "v": 0
+      },
+      {
+       "k": "巨型地块 -0.8×(超出 46% 的部分)",
+       "v": -0.432
+      },
+      {
+       "k": "保留组团 +0.15×",
+       "v": 0
+      }
+     ],
+     "metrics": {
+      "roadM2": 0,
+      "roadShare": 0,
+      "parcels": 1,
+      "unservedM2": 0,
+      "unservedShare": 0,
+      "frontageShare": 0.4078,
+      "fragmentShare": 0,
+      "compoundM2": 0
+     },
+     "reason": "地块 1 块（1 个分块，最大 100%）· 道路 0 m²（0.0%，其中白铺 0 m²）· 无接入 0 块 0 m² · 临街率 41% · 残片 0.0% · 组团 0%",
+     "rejected": null,
+     "built": {
+      "parcels": 1,
+      "buildings": 0,
+      "coverage": 0,
+      "roadM2": 0,
+      "stalls": 0,
+      "greenShare": 0,
+      "frontageContinuity": 0,
+      "doorReachM": 0
+     },
+     "demand": {
+      "ok": false,
+      "failed": [
+       "D4",
+       "D6"
+      ],
+      "items": [
+       {
+        "code": "D1",
+        "label": "主入口经连续通行面接入公共道路",
+        "ok": true,
+        "detail": "0 樘主入口全部连通（平均离通行面 0 m）"
+       },
+       {
+        "code": "D2",
+        "label": "服务/货运入口有对应路径",
+        "ok": true,
+        "detail": "全部服务入口可经通行面接出"
+       },
+       {
+        "code": "D3",
+        "label": "停车：车位→通道→场内道→出入口→道路",
+        "ok": true,
+        "detail": "无集中停车（本方案未设停车地块）"
+       },
+       {
+        "code": "D4",
+        "label": "装卸/回转区满足车型（内切半径 ≥ 5.5 m）",
+        "ok": false,
+        "detail": "工业地块没有任何装卸区 —— 不可行"
+       },
+       {
+        "code": "D5",
+        "label": "主要公共空间（≥300 m²）有连续步行接入",
+        "ok": true,
+        "detail": "无 ≥300 m² 的公共空间"
+       },
+       {
+        "code": "D6",
+        "label": "通行路径按实际净宽（步行 ≥ 1.5 m，车行 ≥ 3.5 m）",
+        "ok": false,
+        "detail": "整块地没有任何成规模的步行/车行通道面（只有贴建筑的零碎铺装）"
+       }
+      ],
+      "stats": {
+       "buildings": 0,
+       "doorsChecked": 0,
+       "doorsReachable": 0,
+       "meanDoorGapM": 0,
+       "parkChains": 0,
+       "parkChainsOk": 0,
+       "publicSpaces": 0,
+       "publicSpacesReachable": 0,
+       "minWalkWidthM": 0,
+       "loadingRadiusM": -1
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

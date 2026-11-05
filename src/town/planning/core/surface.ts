@@ -425,8 +425,11 @@ export function surfaceOffset(s: PlanSurface, d: number): PlanSurface[] {
   return [out];
 }
 
-/** 环是否自交（偏移后的自检） */
-function selfIntersects(r: Pt[]): boolean {
+/** 环是否自交（偏移后的自检）
+ *
+ * F2 起对外导出：地块分割的硬约束验证要复用同一份判据，
+ * 不允许在 subdivision 里再写一套"差不多"的自交检测。 */
+export function selfIntersects(r: Pt[]): boolean {
   const n = r.length;
   if (n < 4) return false;
   for (let i = 0; i < n; i++) {
