@@ -35,7 +35,10 @@ export function realizeSitePlan(candidate: SitePlanCandidate, ctx: RealizationCo
 
   // 顺序：先算道路走廊（要拿来从地面里扣），再铺地面
   const roadPart = emptyPart(candidate.id);
-  const { stats: roadStats, corridors } = realizeRoads(candidate, ctx, roadPart, { clip: candidateGroundClip(candidate) });
+  // 裁剪体：solver 出的中心线是"能走的地方"，常常落在退线带里 —— 而 ground 并集
+  // 只覆盖功能面，拿它当裁剪体等于把退线带里的路整段删掉。所以 solver 模式裁红线。
+  const clip = ctx.circulationMode === 'solver' ? ctx.parcel : candidateGroundClip(candidate);
+  const { stats: roadStats, corridors } = realizeRoads(candidate, ctx, roadPart, { clip });
 
   realizeGround(candidate, ctx, part, corridors);
   part.surfaces.push(...roadPart.surfaces);
@@ -58,6 +61,9 @@ export function realizeSitePlan(candidate: SitePlanCandidate, ctx: RealizationCo
   const obstacles = [
     ...candidate.buildings.map((b) => b.footprint),
     ...candidate.ground.filter((g) => HARD_OBSTACLES.has(g.program)).map((g) => g.surface),
+    // solver 的路先扣掉再排车位：车位不许压在路面上。
+    // legacy 模式保持原行为（那条路上本来就没排过车位，动了只会让老地块漂）。
+    ...(ctx.circulationMode === 'solver' ? corridors : []),
   ];
   const parkingStats = realizeParking(candidate, ctx, part, obstacles);
 

@@ -40,6 +40,7 @@ import { sfDiagnostics } from './typologies/singlefamily';
 import { greenDiagnostics } from './typologies/green';
 import { parkDiagnostics } from './typologies/park';
 import { civicDiagnostics } from './typologies/civic';
+import { generateSkeletonCandidates, type PatternMode, type S1Mode } from './skeleton';
 
 /** typology → 生成器 */
 export const PLANNING_GENERATORS: Partial<Record<SiteTypology, (ctx: SiteContext) => SitePlanCandidate[]>> = {
@@ -155,7 +156,10 @@ function topUpBuildings(ctx: SiteContext, c: SitePlanCandidate): void {
 
   // 空地：可建区减去建筑与硬质地面（绿地可以盖，配套就在绿地里）
   const hard = c.ground
-    .filter((g) => g.program === 'parking' || g.program === 'employee_parking' || g.program === 'truck_court' || g.program === 'loading_apron' || g.program === 'service' || g.program === 'service_lane' || g.program === 'pedestrian' || g.program === 'entrance_forecourt')
+    // `driveway` 必须在列表里：S1 的车行主通道就是它。漏掉的话，
+    // "按覆盖率补建筑"会把附属体量直接放到车道上 —— 路被建筑压断，
+    // 而且诊断里看不出来（补量的位置不经过任何交通检查）。
+    .filter((g) => g.program === 'driveway' || g.program === 'parking' || g.program === 'employee_parking' || g.program === 'truck_court' || g.program === 'loading_apron' || g.program === 'service' || g.program === 'service_lane' || g.program === 'pedestrian' || g.program === 'entrance_forecourt')
     .map((g) => g.surface);
   const free = surfaceSubtract([ctx.buildableArea], [...c.buildings.map((b) => b.footprint), ...hard]);
   if (free.length === 0) return;
@@ -207,16 +211,29 @@ function topUpBuildings(ctx: SiteContext, c: SitePlanCandidate): void {
   }
 }
 
-/** 按 typology 生成候选；没有对应生成器就返回空数组 */
-export function generateCandidates(ctx: SiteContext): SitePlanCandidate[] {
+/**
+ * 按 typology 生成候选；没有对应生成器就返回空数组。
+ *
+ * `opts.s1` 打开**场地布局骨架**（见 `planning/skeleton/`）：骨架候选**替换**
+ * 原 archetype 的候选，而不是混在一起排 —— 两套的空间语法不同，混排会让
+ * "评分最高"变成"哪套更容易被这套尺子量得高"，那就不是设计比较了。
+ * 骨架一套都没有时自动回落原 archetype（复杂地块的简化回退）。
+ */
+export function generateCandidates(
+  ctx: SiteContext,
+  opts: { s1?: S1Mode; pattern?: PatternMode } = {}
+): SitePlanCandidate[] {
   const gen = PLANNING_GENERATORS[ctx.typology];
   if (!gen) return [];
-  const cands = gen(ctx);
+  const sk = generateSkeletonCandidates(ctx, opts.s1 ?? 'off', opts.pattern ?? 'off');
+  const cands = sk.length > 0 ? sk : gen(ctx);
 
   const diag = DIAGNOSTICS[ctx.typology];
   for (const c of cands) {
     rectifyBuildings(ctx, c);
-    topUpBuildings(ctx, c);
+    // 骨架候选**不补量**：它的建筑是按布局意图排的，面积由组团格数控制。
+    // 补量会往空地里塞附属盒子，正好破坏"有秩序"这件事。
+    if (!c.archetype.startsWith('SK_')) topUpBuildings(ctx, c);
 
     // 矩形化会把斜边上的三角格子丢掉（约 8% 的可建区）。
     // 这些地如果不管，就成了"可建区里没有 program 的空白" —— 2D 上是一片

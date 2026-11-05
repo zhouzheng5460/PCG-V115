@@ -41,6 +41,16 @@ export interface GridOptions {
   cells: number;
   /** 城市半径 */
   radius: number;
+  /** 街区尺度的连续系数（默认 1）。见 S 的算法 */
+  spacingMul?: number;
+  /**
+   * 每边格数下限（默认 3）。
+   *
+   * 街区尺度 `S = R / n`，而 `n = round(√(cells/π))` 会被这个下限夹住 ——
+   * 只要 cells 落在 28~44，n 恒为 3，`spacingK` 就完全失效。
+   * 放到 2 才能让"放大街区"这个参数真正起作用（用于尺度对照）。
+   */
+  minN?: number;
   /** 变形幅度：0 = 规整，1 = 明显弯曲/螺旋 */
   warp?: number;
   /** 每隔几条线出一条主干道 */
@@ -339,8 +349,11 @@ export function buildGridLayout(opts: GridOptions): GridLayout {
   const layout = opts.layout ?? 'grid';
 
   // 街区特征尺度：圆内街区数 ≈ π·n²，所以 S = R / √(cells/π)
-  const n = Math.max(3, Math.round(Math.sqrt(cells / Math.PI)));
-  const S = R / n;
+  const n = Math.max(opts.minN ?? 3, Math.round(Math.sqrt(cells / Math.PI)));
+  // 街区尺度。`spacingMul` 是给 spacingK 用的**连续**微调：
+  // n 是整数，cells 落在同一档（28~44）时 S 完全不动，spacingK 就变成死参数。
+  // 乘一个以默认档为锚的系数（k / 1.5），默认值下乘 1、城市与之前逐块一致。
+  const S = (R / n) * (opts.spacingMul ?? 1);
 
   // 张量场是另一条链（场 → 流线 → 平面图 → 面），先委托出去，下面只管格网类布局
   if (layout === 'tensor') {

@@ -14,6 +14,19 @@ import { emptyScene, toCCW } from './types';
 import type { MatKey } from './palette';
 
 export interface SceneOptions {
+  /**
+   * R1.4 内部交通开关：off / golden / all（默认 all）。
+   *
+   * 必须在**装配场景**这一层传进去：2D、3D、导出都从 `buildScene` 取数据，
+   * 在这里传才保证三个视图看到的是同一份规划结果。
+   */
+  circulation?: 'off' | 'golden' | 'all';
+  /** S1 场地布局骨架：off / golden / all（默认 off，见 planner-bridge 的说明） */
+  s1?: 'off' | 'golden' | 'all';
+  /** 停车求解器：legacy / placemaker / compare */
+  parkingProvider?: 'legacy' | 'placemaker' | 'compare';
+  /** Pattern Registry：off / golden / all */
+  pattern?: 'off' | 'golden' | 'all';
   /** 建筑高度倍率 */
   heightScale?: number;
   /** 是否生成道路标线 */
@@ -103,7 +116,15 @@ export function buildScene(model: Model, opts: SceneOptions = {}): Scene {
   //    之后不再经过任何 legacy 地块规划逻辑。这是 R8 的核心红线。
   if (wantLots) {
     const mode = opts.planningMode ?? 'legacy';
-    const planner = mode === 'legacy' ? null : buildPlannerBundle(model, net, mode);
+    const planner =
+      mode === 'legacy'
+        ? null
+        : buildPlannerBundle(model, net, mode, {
+        circulation: opts.circulation ?? 'all',
+        s1: opts.s1 ?? 'off',
+        parkingProvider: opts.parkingProvider ?? 'legacy',
+        pattern: opts.pattern ?? 'off',
+      });
 
     for (let pi = 0; pi < model.patches.length; pi++) {
       const patch = model.patches[pi];

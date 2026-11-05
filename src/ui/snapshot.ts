@@ -53,6 +53,11 @@ export interface SceneState {
   params: TownParams;
   /** 单块地块的手动覆盖（键 = patchKey） */
   patchEdits: Map<string, PatchEdit>;
+  /** 实验开关（S1 / Pattern / 停车 provider / R1）—— 也要进快照，否则分享链接看到的是旧算法 */
+  s1Mode?: 'off' | 'golden' | 'all';
+  patternMode?: 'off' | 'golden' | 'all';
+  parkingProvider?: 'legacy' | 'placemaker' | 'compare';
+  circulationMode?: 'off' | 'golden' | 'all';
 }
 
 // 快照格式版本。字段含义变了就 +1，老链接会被安全忽略而不是解析出半座城
@@ -82,6 +87,18 @@ export interface Snapshot {
   pr: TownParams;
   /** 单块地块的手动覆盖（可选：老链接没有这一段） */
   pe?: Record<string, PatchEditSnap>;
+  /**
+   * 实验开关（都可选，老链接没有这几项）。
+   *
+   * 为什么必须进快照：`?s1=` `?pattern=` `?parkingProvider=` 原来只走 query，
+   * 而快照链接（`#s=…`）是"把当前这一屏存下来"的语义 —— 分享出去之后
+   * 对方看到的还是旧算法，于是"地址导致版本不对"。现在它们和 seed 一样，
+   * 是这一屏的一部分。
+   */
+  s1?: 'off' | 'golden' | 'all';
+  ptn?: 'off' | 'golden' | 'all';
+  pp?: 'legacy' | 'placemaker' | 'compare';
+  cm?: 'off' | 'golden' | 'all';
 }
 
 /** 两位小数：1 世界单位 ≈ 7 m，0.01 单位 ≈ 7 cm，够用且能压掉浮点噪声 */
@@ -157,6 +174,11 @@ export function snapshotOf(st: SceneState): Snapshot {
     })),
     pr: st.params,
     ...(Object.keys(pe).length > 0 ? { pe } : {}),
+    // 只写"非默认"的值：默认组合不占字符，老链接也不受影响
+    ...(st.s1Mode && st.s1Mode !== 'off' ? { s1: st.s1Mode } : {}),
+    ...(st.patternMode && st.patternMode !== 'off' ? { ptn: st.patternMode } : {}),
+    ...(st.parkingProvider && st.parkingProvider !== 'legacy' ? { pp: st.parkingProvider } : {}),
+    ...(st.circulationMode && st.circulationMode !== 'all' ? { cm: st.circulationMode } : {}),
   };
 }
 
@@ -199,6 +221,11 @@ export function applySnapshot(st: SceneState, sn: Snapshot): boolean {
     };
   }
   if (Number.isFinite(sn.gs)) st.guideStrength = sn.gs;
+
+  if (sn.s1 === 'off' || sn.s1 === 'golden' || sn.s1 === 'all') st.s1Mode = sn.s1;
+  if (sn.ptn === 'off' || sn.ptn === 'golden' || sn.ptn === 'all') st.patternMode = sn.ptn;
+  if (sn.pp === 'legacy' || sn.pp === 'placemaker' || sn.pp === 'compare') st.parkingProvider = sn.pp;
+  if (sn.cm === 'off' || sn.cm === 'golden' || sn.cm === 'all') st.circulationMode = sn.cm;
 
   if (Array.isArray(sn.g)) {
     const out: FieldGuide[] = [];

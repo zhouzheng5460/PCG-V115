@@ -42,6 +42,7 @@ import type { RoadNet } from '../road/system';
 import { siteContextFromModel } from '../town/planning/adapters/model';
 import { generateCandidates } from '../town/planning/generators';
 import { selectBestCandidate } from '../town/shadow/runner';
+import { adoptCirculation } from '../town/planning/circulation/adopt';
 import { realizeSitePlan } from '../town/realize';
 import { INTENSITY_TARGETS, bandState, intensityValue, type BandState } from '../town/shadow/intensity';
 import { surfaceArea } from '../town/planning/core/surface';
@@ -49,6 +50,15 @@ import type { SiteTypology } from '../town/planning/core/types';
 import type { PathFeature, PropFeature, SolidFeature, SurfaceFeature } from './types';
 
 export type PlanningMode = 'legacy' | 'planner' | 'shadow';
+
+/**
+ * R1.3 受控开关：启用新内部交通网络的地块（patchKey）。
+ *
+ * 只有这三个 Golden 先换，其余地块继续走 archetype 手画的 circulation ——
+ * 一次只让三块地变，出问题能一眼定位到是哪一块，而不是整个城市一起漂。
+ * 三个都过了生产验收再决定要不要放开。
+ */
+export const R13_CIRCULATION_PARCELS = new Set<string>(['-469:284', '176:176', '252:-578']);
 
 /** 第一批接管的 typology */
 export const PLANNER_ENABLED_TYPOLOGIES: SiteTypology[] = [
@@ -102,6 +112,46 @@ export interface PlannerParcelReport {
   /** 建筑基底覆盖率 */
   coverage?: number;
   intensity?: PlannerIntensityInfo;
+
+  /**
+   * R1.3 内部交通：这块地的新网络是否真的换上了。
+   *
+   * 只有受控开关里那几块（三个 Golden）会跑求解器；其余地块没有这一项。
+   * `applied === false` 时必须看 `reason` —— 不许把"沿用旧路"读成"新网络连通"。
+   */
+  /** 停车求解结果（车位由哪套 provider 算出、排了多少） */
+  parking?: {
+    requests: number;
+    stalls: number;
+    providers: string[];
+    islands: number;
+    aisleM2: number;
+    aisleComps: number;
+    frontRate: number;
+    /** 停车区语义修复：转景观 / 仍留铺装（无功能） */
+    lawnM2: number;
+    deadPavingM2: number;
+    /** 每个请求的明细（角色 / 面积 / 车位数），诊断报告用 */
+    perRequest: { role: string; usableM2: number; stalls: number; provider: string }[];
+  };
+  circulation?: {
+    applied: boolean;
+    reason?: string;
+    /** 新铺路径条数 */
+    paths: number;
+    /** 新铺总长（m） */
+    lengthM: number;
+    /** 保留的旧 archetype 路条数 */
+    keptLegacy: number;
+    /** 被新路替换掉的旧路条数 */
+    replacedLegacy: number;
+    /** 因共用主干而没重复铺的长度（m） */
+    dedupedM: number;
+    odTotal: number;
+    odConnected: number;
+    sharedRate: number;
+    ms: number;
+  };
 }
 
 export interface PlannerParcelFeatures {
@@ -111,6 +161,9 @@ export interface PlannerParcelFeatures {
   props: PropFeature[];
 }
 
+/** R1.4 内部交通的三档开关 */
+export type CirculationMode = 'off' | 'golden' | 'all';
+
 export interface PlannerBundle {
   /** 每块被接管的地块的特征（key = patchKey） */
   byParcel: Map<string, PlannerParcelFeatures>;
@@ -118,6 +171,10 @@ export interface PlannerBundle {
   reports: Map<string, PlannerParcelReport>;
   /** shadow 模式：Planner 的特征（画成红色虚线） */
   overlay: PlannerParcelFeatures;
+  /** R1.4 诊断：每块地的完整网络 / 入口 / 失败点（只有跑过求解器或尝试过的地块才有） */
+  circulationDebug: Map<string, import('../town/planning/circulation/adopt').CirDebug>;
+  /** 本次用的是哪一档开关 */
+  circulationMode: CirculationMode;
   stats: {
     total: number;
     covered: number;
@@ -130,12 +187,60 @@ function emptyFeatures(): PlannerParcelFeatures {
   return { surfaces: [], solids: [], paths: [], props: [] };
 }
 
+export interface PlannerBundleOptions {
+  /**
+   * S1 场地布局骨架：`off` / `golden` / `all`，默认 `off`。
+   *
+   * 默认关是**有意**的 —— 本轮是三个 Golden 的方案对比，不是全城换血。
+   * 打开之后这三块地会走"先车道后建筑"的骨架流程（见 `planning/skeleton/`）。
+   */
+  s1?: import('../town/planning/skeleton').S1Mode;
+  /** 停车求解器：legacy / placemaker / compare（默认 legacy，生产行为不变） */
+  parkingProvider?: 'legacy' | 'placemaker' | 'compare';
+  /** Pattern Registry：off / golden / all（默认 off） */
+  pattern?: import('../town/planning/skeleton').PatternMode;
+  /**
+   * R1.4 开关：`off` 不开 / `golden` 只开三块 / `all` 全城。
+   *
+   * 不传就是 `all`（本轮起本地开发默认全城启用）。
+   */
+  circulation?: CirculationMode;
+  /**
+   * 兼容 R1.3 的旧调用：直接给地块集合。
+   * `null` = 全城，`new Set()` = 全关。给了 `circulation` 时以它为准。
+   */
+  circulationParcels?: Set<string> | null;
+}
+
+/** 把开关翻译成"哪些地块启用"：null = 全部，Set = 只有这些 */
+function circulatingSet(opts: PlannerBundleOptions): Set<string> | null {
+  if (opts.circulation !== undefined) {
+    if (opts.circulation === 'off') return new Set<string>();
+    if (opts.circulation === 'golden') return R13_CIRCULATION_PARCELS;
+    return null;
+  }
+  if (opts.circulationParcels !== undefined) return opts.circulationParcels;
+  return null; // 默认 all
+}
+
 /**
  * 跑一遍 Planner，产出可直接进 Scene 的特征与报告。
  *
  * 注意 `realizeSitePlan` 之后**不再有任何 legacy 调用** —— 这是 R8 的核心红线。
  */
-export function buildPlannerBundle(model: Model, net: RoadNet, mode: PlanningMode): PlannerBundle {
+export function buildPlannerBundle(
+  model: Model,
+  net: RoadNet,
+  mode: PlanningMode,
+  opts: PlannerBundleOptions = {}
+): PlannerBundle {
+  const gate = circulatingSet(opts);
+  const circulationMode: CirculationMode =
+    opts.circulation ?? (gate === null ? 'all' : gate.size === 0 ? 'off' : 'golden');
+  const circulationDebug = new Map<
+    string,
+    import('../town/planning/circulation/adopt').CirDebug
+  >();
   const byParcel = new Map<string, PlannerParcelFeatures>();
   const reports = new Map<string, PlannerParcelReport>();
   const overlay = emptyFeatures();
@@ -167,7 +272,7 @@ export function buildPlannerBundle(model: Model, net: RoadNet, mode: PlanningMod
       continue;
     }
 
-    const candidates = generateCandidates(ctx);
+    const candidates = generateCandidates(ctx, { s1: opts.s1 ?? 'off', pattern: opts.pattern ?? 'off' });
     if (candidates.length === 0) {
       report.reason = '该地块没有可用候选（地块太小 / 形状不适合这类语法）';
       continue;
@@ -175,7 +280,35 @@ export function buildPlannerBundle(model: Model, net: RoadNet, mode: PlanningMod
 
     const best = selectBestCandidate(candidates);
     const cand = best.winner;
-    const realized = realizeSitePlan(cand, {
+
+    // ---- R1.3 内部交通：受控开关，只对三个 Golden 换上求解器的网络
+    //
+    // 这一步在**规划侧**做：Realizer 只负责把中心线铺成路面，不跑 A*、不重规划。
+    // 失败（OD 没全连通 / 没有路径）时保留 archetype 的旧 circulation，
+    // 并把原因写进报告 —— 绝不静默把"沿用旧路"说成"新版连通"。
+    let candToRealize = cand;
+    let circNote: PlannerParcelReport['circulation'];
+    if (gate === null || gate.has(key)) {
+      const adopted = adoptCirculation(ctx, cand);
+      const r = adopted.report;
+      circNote = {
+        applied: r.applied,
+        reason: r.reason,
+        paths: r.paths,
+        lengthM: r.lengthM,
+        keptLegacy: r.keptLegacy,
+        replacedLegacy: r.replacedLegacy,
+        dedupedM: r.dedupedM,
+        odTotal: r.odTotal,
+        odConnected: r.odConnected,
+        sharedRate: r.sharedRate,
+        ms: r.ms,
+      };
+      circulationDebug.set(key, adopted.debug);
+      if (r.applied) candToRealize = adopted.candidate;
+    }
+
+    const realized = realizeSitePlan(candToRealize, {
       group: `lot/${ctx.typology}`,
       solveParking: true,
       // typology 决定建筑外观（住宅暖色 / 商业幕墙 / 工业面板）
@@ -184,6 +317,10 @@ export function buildPlannerBundle(model: Model, net: RoadNet, mode: PlanningMod
       parcel: ctx.parcel,
       buildable: ctx.buildableArea,
       setbackProgram: ctx.typology === 'industrial' ? 'landscape_buffer' : 'landscape',
+      // solver 出的路会走在退线带里：裁剪体必须是**红线**。
+      // 用 ground 并集会把整段裁掉（"路径 2 条、铺装 0 m²"就是这么来的）。
+      circulationMode: circNote?.applied ? 'solver' : 'legacy',
+      parkingProvider: opts.parkingProvider ?? 'legacy',
     });
 
     const feats: PlannerParcelFeatures = {
@@ -205,8 +342,28 @@ export function buildPlannerBundle(model: Model, net: RoadNet, mode: PlanningMod
     report.margin = best.margin;
     report.lowConfidence = best.lowConfidence;
     report.candidateCount = best.count;
+    const ps = realized.parkingStats ?? [];
+    report.parking = {
+      requests: ps.length,
+      stalls: ps.reduce((a, s2) => a + s2.stalls, 0),
+      providers: Array.from(new Set(ps.map((s2) => s2.provider ?? 'legacy'))),
+      islands: ps.reduce((a, s2) => a + (s2.islandCount ?? 0), 0),
+      aisleM2: ps.reduce((a, s2) => a + (s2.aisleM2 ?? 0), 0),
+      // 多请求时取最差：有任何一个不连通，整体就不能算连通
+      aisleComps: ps.length ? Math.max(...ps.map((s2) => s2.aisleComps ?? 1)) : 0,
+      frontRate: ps.length ? Math.min(...ps.map((s2) => s2.frontRate ?? 1)) : 0,
+      lawnM2: ps.reduce((a, s2) => a + (s2.lawnM2 ?? 0), 0),
+      deadPavingM2: ps.reduce((a, s2) => a + (s2.deadPavingM2 ?? 0), 0),
+      perRequest: ps.map((s2) => ({
+        role: s2.role,
+        usableM2: +(s2.usableArea * 49).toFixed(0),
+        stalls: s2.stalls,
+        provider: s2.provider ?? 'legacy',
+      })),
+    };
     report.buildings = realized.solids.length;
     report.coverage = coverage;
+    if (circNote) report.circulation = circNote;
 
     const target = INTENSITY_TARGETS[ctx.typology];
     if (target) {
@@ -244,7 +401,7 @@ export function buildPlannerBundle(model: Model, net: RoadNet, mode: PlanningMod
     void k;
   }
 
-  return { byParcel, reports, overlay, stats };
+  return { byParcel, reports, overlay, circulationDebug, circulationMode, stats };
 }
 
 /** 多边形环面积（带符号） */

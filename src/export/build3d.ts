@@ -4,7 +4,15 @@
 import { Pt } from '../core/geom';
 import type { Model } from '../town/model';
 import { buildScene, type SceneOptions } from '../scene/build';
-import { layerOfPath, layerOfProp, layerOfSolid, layerOfSurface, type LayerId } from '../scene/layers';
+import {
+  hiliteMatOf,
+  isInternalRoadLayer,
+  layerOfPath,
+  layerOfProp,
+  layerOfSolid,
+  layerOfSurface,
+  type LayerId,
+} from '../scene/layers';
 import { MAT } from '../scene/palette';
 import type { Primitive } from './mesh';
 import { flatPolygon, extrudeSolid, cylinder, wallSolid, mergePrimitives } from './mesh';
@@ -19,12 +27,20 @@ export interface Build3DOptions extends SceneOptions {
    * 三维预览和 GLB 导出因此在语义上完全一致：导出所见即所得。
    */
   layers?: (id: LayerId) => boolean;
+  /**
+   * 高亮地块内部道路（与 2D 同一套判定，走 `scene/layers` 的
+   * `isInternalRoadLayer`）。纯表现层：只换颜色，不动几何、不动图层显隐。
+   */
+  hiliteLotRoad?: boolean;
 }
 
 /** 场景 → 三角形。这是 2D 预览与 GLB 导出的唯一出口 */
 export function buildTownMeshes(model: Model, opts: Build3DOptions = {}): Primitive[] {
   const scene = buildScene(model, opts);
   const out: Primitive[] = [];
+  /** 高亮时换色；判定与 2D 完全相同（同一份 layerOfSurface） */
+  const colorOf = (layer: LayerId, mat: keyof typeof MAT) =>
+    opts.hiliteLotRoad && isInternalRoadLayer(layer) ? MAT[hiliteMatOf(layer)] : MAT[mat];
 
   // 铺装 / 标线 / 车位线 / 道具按 (分组, 颜色) 合并成大网格。
   // 不合并的话一座 124 街区的城会导出上万个节点，GLB 体积几乎全花在节点开销上
@@ -58,7 +74,7 @@ export function buildTownMeshes(model: Model, opts: Build3DOptions = {}): Primit
   for (const s of scene.surfaces) {
     if (!vis(layerOfSurface(s))) continue;
     if (!saneRing(s.ring)) continue;
-    addFlat(flatPolygon(s.ring, s.y, s.name, s.group, MAT[s.mat], s.holes ?? []));
+    addFlat(flatPolygon(s.ring, s.y, s.name, s.group, colorOf(layerOfSurface(s), s.mat), s.holes ?? []));
   }
 
   // 建筑与围墙体块
@@ -75,12 +91,12 @@ export function buildTownMeshes(model: Model, opts: Build3DOptions = {}): Primit
     // "薄贴地线"和"立起来的围栏"；但栏杆被拆成两根 5 cm 截面的横杆之后，
     // 高度只有 0.007 单位，按老条件会被铺成贴地白条 —— 整根栏杆消失。
     if (p.height && p.height > 0) {
-      const w = wallSolid(p.pts, p.width, p.y, p.height, p.name, p.group, MAT[p.mat], false);
+      const w = wallSolid(p.pts, p.width, p.y, p.height, p.name, p.group, colorOf(layerOfPath(p), p.mat), false);
       if (w) out.push(w);
     } else {
       const band = bandBetween(p.pts, p.width / 2, -p.width / 2);
       if (!band) continue;
-      addFlat(flatPolygon(band, p.y, p.name, p.group, MAT[p.mat]));
+      addFlat(flatPolygon(band, p.y, p.name, p.group, colorOf(layerOfPath(p), p.mat)));
     }
   }
 

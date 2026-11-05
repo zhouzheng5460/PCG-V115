@@ -24,6 +24,46 @@ const CELL = CELL_M / 7; // 世界单位
 
 export type Traffic = 'pedestrian' | 'vehicle' | 'service';
 
+/**
+ * **网络类别** —— R1.2-C 的核心改动。
+ *
+ * 原来 `pedestrian / vehicle / service` 各建一张栅格网。但单块地上每类交通往往
+ * **只有一个目标**（一扇主门、一个停车场、一个后勤口），一张网一条路，那条路
+ * 只被走一次 —— 共享率在数学上恒等于 0，铺多少主干都没用。
+ *
+ * 车行与后勤在物理上是同一条通道（同样 2.2 m 净空、同一套转弯半径），工程上也
+ * 就是"一条内部主路，客运和货运分时段用"。所以这里把它们并成一张网：停车入口
+ * 先接入，后勤口随后**并进同一条主干**，共享率才可能真的 > 0。
+ *
+ * 行人不并 —— 人行道是另一套宽度与铺装，合并会让人行路径被 2.2 m 净空挡在门外。
+ */
+type NetKind = 'pedestrian' | 'vehicle';
+
+/** 交通类型 → 所属网络 */
+const netOf = (t: Traffic): NetKind => (t === 'pedestrian' ? 'pedestrian' : 'vehicle');
+
+/**
+ * 交通类型 → 需要的净空半径（m）。
+ *
+ * R1.5：**必须按最终路面宽度的一半算**，不能按"中线擦着建筑走"算。
+ *
+ * 原来行人只留 0.5 m，中线确实不碰建筑，但落地面是 3 m 宽 —— 铺出来必然啃进
+ * 建筑 1 m（全城实测 550 m²，靠 Realizer 事后裁剪才补回来，代价是路被切断）。
+ * 现在净空 = 路宽/2，规划阶段就不允许出现"中线合法但路面放不下"的位置。
+ */
+const ROAD_W: Record<Traffic, number> = { pedestrian: 3, vehicle: 5, service: 5 };
+const CLEAR: Record<Traffic, number> = {
+  pedestrian: ROAD_W.pedestrian / 2,
+  vehicle: ROAD_W.vehicle / 2,
+  service: ROAD_W.service / 2,
+};
+
+/** 每张网的净空要求（m）：取该网内所有交通类型的最大值，**按最终路宽的一半** */
+const NET_CLEAR: Record<NetKind, number> = {
+  pedestrian: ROAD_W.pedestrian / 2,
+  vehicle: ROAD_W.vehicle / 2,
+};
+
 /** 吸附失败/成功的完整记录 —— 失败必须能解释，不能静默丢掉一条必要连接 */
 export interface SnapInfo {
   /** 吸附前坐标 */
@@ -86,6 +126,28 @@ export interface CirResult {
   nodes: CirNode[];
   edges: CirEdge[];
   paths: PlanSurface[];
+  /**
+   * 接不上的需求点（R1.4 诊断用）。
+   *
+   * 原来这些只以中文字符串塞在 `warnings` 里，画面上没法标出来 ——
+   * 而"哪一扇门没接上"恰恰是最需要一眼看见的东西。
+   */
+  unreachable: { id: string; kind: CirNode['kind']; at: Pt; reason: string }[];
+  /**
+   * 被并进初始网络的**既有可通行道路**（服务道 / 车道 / 停车通道 / 步道 / 已有行车线）。
+   *
+   * 有了它才能画"完整 PathGraph"：新铺的那几条只是补丁，网络的主体常常是这些。
+   */
+  adopted: { program: string; area: PlanSurface }[];
+  /** 并入的既有道路格数 */
+  adoptedCells: number;
+  /**
+   * 求解用的栅格原点/尺寸（世界单位）。
+   *
+   * 两张网共用同一组 x0/y0/nx/ny（同一块地、同一 CELL），所以下游要把
+   * "哪些格子已经被铺过"做去重时，用这一份就够了，不必自己再推一遍网格。
+   */
+  grid?: { x0: number; y0: number; nx: number; ny: number };
   stats: {
     solved: number;
     totalM: number;
@@ -96,14 +158,17 @@ export interface CirResult {
     /** 真实共享段长度（m） */
     sharedM: number;
     connected: boolean;
+    /** 必要 OD 总数（= 非街口入口数） */
+    odTotal?: number;
+    /** 真正接上网的 OD 数。**这是连通性的唯一口径** ——
+     *  "目标本来就落在既有道路上"没有新边，但它是连通的，不能按边数数。 */
+    odConnected?: number;
     ms: number;
     cells: number;
   };
   warnings: string[];
 }
 
-/** 交通类型 → 需要的净空半径（m）。车要 3 m 才开得过去 */
-const CLEAR: Record<Traffic, number> = { pedestrian: 0.5, vehicle: 2.2, service: 2.2 };
 /** 距离场的截断值（世界单位）：必须 ≥ 最大净空，否则复用时会误判 */
 const FIELD_CAP = (Math.max(...Object.values(CLEAR)) * 1.5) / 7;
 
@@ -324,6 +389,94 @@ function components(g: Grid): Int32Array {
 const DX8 = [1, 1, 0, -1, -1, -1, 0, 1];
 const DY8 = [0, 1, 1, 1, 0, -1, -1, -1];
 
+/** 最大连通分量。种子/目标都往这里落 —— 小分量是建筑膨胀夹出来的死胡同。 */
+function mainComponentOf(g: Grid, comp: Int32Array): number {
+  const size = new Map<number, number>();
+  for (let k = 0; k < comp.length; k++) {
+    const c = comp[k];
+    if (c < 0) continue;
+    size.set(c, (size.get(c) ?? 0) + 1);
+  }
+  let best = -1;
+  let bn = -1;
+  for (const [id, cnt] of size) if (cnt > bn) { bn = cnt; best = id; }
+  return best;
+}
+
+/**
+ * 吸附到**主连通域**里的最近可走格。
+ *
+ * `snapWithReason` 只保证"落到一个空格"，不管那个空格能不能走出去。2.2 m 净空下
+ * 街区出口正对的退线带很容易只剩一两个格子，四周被建筑膨胀围死 —— 于是网络种子
+ * 全成了孤岛，Dijkstra 从种子出发 1~3 格就堆空。这里先按原逻辑吸附，若落点不在
+ * 主分量，再以它为中心向外找主分量的格子。
+ */
+function snapToMain(g: Grid, comp: Int32Array, mainId: number, p: Pt, dir?: Pt, maxR = 40): SnapInfo {
+  const base = snapWithReason(g, p, maxR, dir);
+  if (!base.to) return base;
+  const k0 = idxOf(g, base.to);
+  if (comp[k0] === mainId) return base;
+  const [ci, cj] = toCell(g, base.to);
+  for (let r = 1; r <= maxR; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const i = ci + dx;
+        const j = cj + dy;
+        if (i < 0 || j < 0 || i >= g.nx || j >= g.ny) continue;
+        const k = j * g.nx + i;
+        if (g.blocked[k] || comp[k] !== mainId) continue;
+        const c2 = cellCenter(g, i, j);
+        return { from: p, to: c2, distM: +dist(p, c2).toFixed(2) * 7, reason: 'blocked-at-point' };
+      }
+    }
+  }
+  return { ...base, reason: 'no-free-cell' };
+}
+
+/**
+ * initNetwork：把候选里**已经存在**的合法内部道路并入初始网络。
+ *
+ * 不做这一步时，新铺的路径永远不会复用既有道路 ——"复用长度"恒为 0，而且会在
+ * 已有车道上**并排再画一条**，视觉上是双线。archetype 手画的服务道、宅前车道、
+ * 停车场通道都是已经成立的事实，网络必须承认它们。
+ */
+function seedExistingRoads(
+  g: Grid,
+  net: Uint8Array,
+  c: SitePlanCandidate,
+  nk: NetKind,
+  out?: { program: string; area: PlanSurface }[]
+): number {
+  const progs: string[] =
+    nk === 'vehicle'
+      ? ['service_lane', 'driveway', 'parking_aisle', 'loading_apron', 'truck_court']
+      : ['pedestrian', 'driveway'];
+  let adopted = 0;
+  for (const gr of c.ground) {
+    if (!progs.includes(gr.program)) continue;
+    if (out) out.push({ program: gr.program, area: gr.surface });
+    for (let k = 0; k < net.length; k++) {
+      if (net[k] || g.blocked[k]) continue;
+      const x = g.x0 + ((k % g.nx) + 0.5) * CELL;
+      const y = g.y0 + (Math.floor(k / g.nx) + 0.5) * CELL;
+      if (!pointIn(x, y, gr.surface.outer)) continue;
+      net[k] = 1;
+      adopted++;
+    }
+  }
+  for (const p of c.circulation) {
+    if (nk === 'pedestrian' && p.role !== 'pedestrian') continue;
+    for (const pt of p.pts) {
+      const k = idxOf(g, pt);
+      if (k < 0 || k >= net.length || g.blocked[k] || net[k]) continue;
+      net[k] = 1;
+      adopted++;
+    }
+  }
+  return adopted;
+}
+
 /** A*（8 邻域）。`penalty` 让已用格子变贵，用来生成"不同的备选" */
 function astar(g: Grid, s: [number, number], t: [number, number], penalty?: Float32Array, reuse?: Uint8Array): Pt[] | null {
   const { nx, ny } = g;
@@ -394,7 +547,18 @@ function multiSourceDijkstra(
   net: Uint8Array,
   comp: Int32Array,
   target: number
-): { path: Pt[] | null; joinAt: Pt | null; fromId: string | null; steps: number; expanded: number; sourceCount: number } {
+): {
+  path: Pt[] | null;
+  joinAt: Pt | null;
+  fromId: string | null;
+  steps: number;
+  expanded: number;
+  sourceCount: number;
+  /** 目标是否被搜索到达（用来区分"几何断开"和"目标本来就在网上"） */
+  reached: boolean;
+  /** 目标格本身是不是就是网络格 —— 此时不需要新路，但也没有"路径"可返回 */
+  targetIsSeed: boolean;
+} {
   const { nx, ny } = g;
   const N = nx * ny;
   const dist = new Float32Array(N).fill(Infinity);
@@ -409,7 +573,8 @@ function multiSourceDijkstra(
     heap.push(k, 0);
     sourceCount++;
   }
-  if (sourceCount === 0) return { path: null, joinAt: null, fromId: null, steps: 0, expanded: 0, sourceCount: 0 };
+  if (sourceCount === 0)
+    return { path: null, joinAt: null, fromId: null, steps: 0, expanded: 0, sourceCount: 0, reached: false, targetIsSeed: false };
 
   let expanded = 0;
   while (heap.size) {
@@ -438,7 +603,13 @@ function multiSourceDijkstra(
     }
   }
   if (came[target] === -1 && dist[target] > 1e-6) {
-    return { path: null, joinAt: null, fromId: null, steps: 0, expanded, sourceCount };
+    return { path: null, joinAt: null, fromId: null, steps: 0, expanded, sourceCount, reached: false, targetIsSeed: false };
+  }
+  const targetIsSeed = came[target] === -1 && dist[target] <= 1e-6;
+  if (targetIsSeed) {
+    // 目标本身已经是网络格：不需要新路。**这不是失败** —— 原来这里返回 null，
+    // 上层就报"无法接入"，把"已经连着"误报成"连不上"。
+    return { path: null, joinAt: cellCenter(g, target % nx, (target - (target % nx)) / nx), fromId: 'net', steps: 0, expanded, sourceCount, reached: true, targetIsSeed: true };
   }
   const out: Pt[] = [];
   let cur = target;
@@ -460,6 +631,8 @@ function multiSourceDijkstra(
     steps,
     expanded,
     sourceCount,
+    reached: true,
+    targetIsSeed: false,
   };
 }
 
@@ -530,6 +703,22 @@ class MinHeap {
 
 const dist = (a: Pt, b: Pt) => Math.hypot(b.x - a.x, b.y - a.y);
 const lenM = (pts: Pt[]) => pts.slice(1).reduce((s, p, i) => s + dist(pts[i], p), 0) * 7;
+
+/** 沿折线按 CELL(1.5 m) 步长重采样 —— 统计共享长度不能只用拐点 */
+function sampleAlong(pts: Pt[]): Pt[] {
+  const out: Pt[] = [];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const nSeg = Math.max(1, Math.ceil(dist(a, b) / CELL));
+    for (let s = 0; s < nSeg; s++) {
+      const t = s / nSeg;
+      out.push(new Pt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+    }
+  }
+  if (pts.length) out.push(pts[pts.length - 1]);
+  return out;
+}
 
 function idxOf(g: Grid, p: Pt): number {
   const [i, j] = toCell(g, p);
@@ -622,7 +811,7 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
     nodes.push({ id: `park_${i}`, at: best, kind: 'parking', block: best, role: pr.role });
   }
   if (nodes.length < 2) {
-    return { nodes, edges, paths: [], stats: { solved: 0, totalM: 0, mainM: 0, subM: 0, paveM2: 0, sharedRate: 0, sharedM: 0, connected: true, ms: performance.now() - t0, cells: 0 }, warnings: ['入口不足，跳过'] };
+    return { nodes, edges, paths: [], unreachable: [], adopted: [], adoptedCells: 0, stats: { solved: 0, totalM: 0, mainM: 0, subM: 0, paveM2: 0, sharedRate: 0, sharedM: 0, connected: true, ms: performance.now() - t0, cells: 0 }, warnings: ['入口不足，跳过'] };
   }
 
   // ② OD（有界：只连"街 → 要素"，不做全入口两两搜索）
@@ -652,10 +841,20 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
   // 顺带解决性能：每个入口**一次**多源 Dijkstra，而不是"每个目标 × 4 个出口各一次 A*"。
   const tGrid = performance.now();
   let cells = 0;
-  const grids = new Map<Traffic, { g: Grid; comp: Int32Array; net: Uint8Array; odCount: Int32Array }>();
-  for (const tr of ['pedestrian', 'vehicle', 'service'] as Traffic[]) {
-    const g = buildGrid(ctx, c, CLEAR[tr]);
-    grids.set(tr, { g, comp: components(g), net: new Uint8Array(g.nx * g.ny), odCount: new Int32Array(g.nx * g.ny) });
+  const NETS: NetKind[] = ['pedestrian', 'vehicle'];
+  const grids = new Map<
+    NetKind,
+    { g: Grid; comp: Int32Array; main: number; net: Uint8Array }
+  >();
+  for (const nk of NETS) {
+    const g = buildGrid(ctx, c, NET_CLEAR[nk]);
+    const comp = components(g);
+    grids.set(nk, {
+      g,
+      comp,
+      main: mainComponentOf(g, comp),
+      net: new Uint8Array(g.nx * g.ny),
+    });
     cells += g.nx * g.ny;
   }
   const tGridDone = performance.now();
@@ -664,34 +863,68 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
   const trafficOf = (kind: CirNode['kind']): Traffic =>
     kind === 'parking' ? 'vehicle' : kind === 'service-door' ? 'service' : 'pedestrian';
 
-  /** 网络种子：合法街区出口。**每种交通各自种一遍** —— 步行、车行、货运是三个独立网络，
-   *  上一版只种了 pedestrian，导致 vehicle/service 网络规模为 0，所有停车/后勤 OD 全部无解。 */
-  for (const tr of ['pedestrian', 'vehicle', 'service'] as Traffic[]) {
-    const gr = grids.get(tr);
+  /** 网络种子：合法街区出口。**每张网各种一遍**。
+   *
+   *  R1.2-C 的两处修正：
+   *  ① 种子落**主连通域**，不再落在任意最近空格。2.2 m 净空下，街区出口正对的
+   *     退线带常被建筑膨胀夹成一两个格子的孤岛 —— 实测 MF/retail 的服务网种子
+   *     全在孤岛上，Dijkstra 从种子出发只扩了 3 格 / 1 格就堆空，任何后勤口都
+   *     连不上。报"后勤口窄缝"是误判，病根在种子。
+   *  ② initNetwork：把候选里**已有**的合法内部道路并入初始网络，新路才会去复用
+   *     它们，而不是并排再画一条。
+   */
+  const seedReport: string[] = [];
+  const adoptedAreas: { program: string; area: PlanSurface }[] = [];
+  let adoptedCells = 0;
+  for (const nk of NETS) {
+    const gr = grids.get(nk);
     if (!gr) continue;
     for (const n of nodes.filter((x) => x.kind === 'street')) {
-      const sn = snapWithReason(gr.g, n.block, 40, nodeDir.get(n.id));
-      if (!sn.to) continue;
+      const sn = snapToMain(gr.g, gr.comp, gr.main, n.block, nodeDir.get(n.id));
+      if (!sn.to) { seedReport.push(`${n.id}↛${nk}(吸附失败)`); continue; }
       const k = idxOf(gr.g, sn.to);
       if (!gr.g.blocked[k]) gr.net[k] = 1;
     }
+    const adopted = seedExistingRoads(gr.g, gr.net, c, nk, nk === 'vehicle' ? adoptedAreas : undefined);
+    adoptedCells += adopted;
+    if (adopted) seedReport.push(`${nk} 并入既有道路 ${adopted} 格`);
   }
+  if (seedReport.length) warnings.push(`initNetwork: ${seedReport.join(' · ')}`);
 
   let searches = 0;
   let expanded = 0;
   const tAstar = { v: 0 };
+  /** 真正接上了网络的目标（含"本来就在网上"的那些） */
+  const reachedTargets = new Set<string>();
+  /** 接不上的需求点（诊断图层要按类型标出来） */
+  const unreachable: { id: string; kind: CirNode['kind']; at: Pt; reason: string }[] = [];
   const order = ['street', 'door', 'parking', 'service-door'] as const;
   for (const kind of order) {
     if (kind === 'street') continue;
     for (const t of nodes.filter((x) => x.kind === kind)) {
       const tr = trafficOf(kind);
-      const gr = grids.get(tr);
+      const gr = grids.get(netOf(tr));
       if (!gr) continue;
-      const { g, comp, net, odCount } = gr;
-      const target = snapWithReason(g, t.block, 40, t.at);
-      if (!target.to) { warnings.push(`${t.id} 吸附失败（${target.reason}）`); continue; }
+      const { g, comp, main, net } = gr;
+      // 目标也落主连通域：落在孤岛上的目标是真的不可达，要明确报出来，
+      // 而不是"就近吸到一个恰好就在旁边的死格子里"然后报不明所以的扩展数。
+      const target = snapToMain(g, comp, main, t.block, t.at);
+      if (!target.to) {
+        warnings.push(`${t.id} 吸附失败（${target.reason}）`);
+        unreachable.push({ id: t.id, kind: t.kind, at: t.at, reason: `吸附失败:${target.reason}` });
+        continue;
+      }
       const tk = idxOf(g, target.to);
-      if (g.blocked[tk]) { warnings.push(`${t.id} 落在障碍格里`); continue; }
+      if (g.blocked[tk]) {
+        warnings.push(`${t.id} 落在障碍格里`);
+        unreachable.push({ id: t.id, kind: t.kind, at: t.at, reason: '落点被建筑/红线封死' });
+        continue;
+      }
+      if (comp[tk] !== main) {
+        warnings.push(`${t.id} 不在${netOf(tr)}主连通域（分量 ${comp[tk]} vs 主 ${main}）—— 该口不可达`);
+        unreachable.push({ id: t.id, kind: t.kind, at: t.at, reason: '孤立分量（净空把入口夹死）' });
+        continue;
+      }
 
       const t0 = performance.now();
       const res = multiSourceDijkstra(g, net, comp, tk);
@@ -700,17 +933,22 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
       expanded += res.expanded;
 
       if (!res.path) {
+        if (res.targetIsSeed) {
+          // 目标本来就落在既有道路/主干上 —— 已连通，只是不需要新铺一段。
+          warnings.push(`${t.id} 已在 ${tr} 网络上（并入既有道路，无需新路）`);
+          reachedTargets.add(t.id);
+          continue;
+        }
         warnings.push(
           `${t.id} 无法接入 ${tr} 网络（目标分量 ${comp[tk]}，网络规模 ${res.sourceCount}，` +
-          `扩展到 ${res.expanded} 格）`
+          `可达 ${res.expanded} 格，reached=${res.reached}）`
         );
+        unreachable.push({ id: t.id, kind: t.kind, at: t.at, reason: '搜索未触达（网络源为 0 或分量不同）' });
         continue;
       }
-      // 网络增量：把这条路径并入网络，并累加每格承担的 OD
+      // 网络增量：把这条路径并入网络（共享计数在 ⑥ 统一按物理通道算，不在这里累加）
       for (const q of res.path) {
-        const k = idxOf(g, q);
-        net[k] = 1;
-        odCount[k]++;
+        net[idxOf(g, q)] = 1;
       }
       edges.push({
         from: res.fromId ?? `net_${res.steps}`,
@@ -725,26 +963,58 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
       });
       // 停车/后勤入口第一次接入后，把它自己也算进网络（后续同类型入口可以共用）
       net[tk] = 1;
+      reachedTargets.add(t.id);
     }
   }
   const tGrow = performance.now();
 
 
-  // ⑥ 共享判定：**按每格实际承担的 OD 数**，不是按宽度倒推
-  for (const e of edges) {
-    const gr = grids.get(e.traffic);
-    if (!gr) continue;
-    let sharedCells = 0;
-    let maxOd = 1;
-    for (const p of e.pts) {
-      const k = idxOf(gr.g, p);
-      const c = gr.odCount[k];
-      if (c >= 2) sharedCells++;
-      maxOd = Math.max(maxOd, c);
+  // ⑥ 共享判定：按**物理通道**统计，跨交通合并。
+  //
+  // 原来是"每张网各算各的 odCount"，于是步行去主门、车行去停车场就算走在同一条
+  // 路上，也永远不算共享 —— 可共享本来就是**街道属性**（一条主路服务几个目的地），
+  // 不是搜索结果属性。而且 `e.pts` 只是化简后的拐点，一条 50 m 直路的共享会被
+  // 压成 1/2，所以这里按 1.5 m 步长重采样再统计。
+  //
+  // 两张网共用同一组 x0/y0/nx/ny（同一块地、同一 CELL），所以格索引可以互认。
+  const ref = grids.get('vehicle')?.g ?? grids.get('pedestrian')?.g;
+  const samples = new Map<CirEdge, Pt[]>();
+  const physDemand = ref ? new Int32Array(ref.nx * ref.ny) : new Int32Array(0);
+  if (ref) {
+    const refIdx = (p: Pt): number => {
+      const [i, j] = toCell(ref, p);
+      if (i < 0 || j < 0 || i >= ref.nx || j >= ref.ny) return -1;
+      return j * ref.nx + i;
+    };
+    // **每条路径内部先去重**：按 1.5 m 步长采样，同一条路会在同一格里落两个点
+    // （段长不是步长整数倍时必然发生）。不先去重就变成"自己和自己共享"，
+    // 实测能把 0% 真实共享报成 31% —— 指标比没有更糟。
+    const cellSetOf = new Map<CirEdge, Set<number>>();
+    for (const e of edges) {
+      const sm = sampleAlong(e.pts);
+      samples.set(e, sm);
+      const seen = new Set<number>();
+      for (const p of sm) {
+        const k = refIdx(p);
+        if (k >= 0) seen.add(k);
+      }
+      cellSetOf.set(e, seen);
+      for (const k of seen) physDemand[k]++;
     }
-    e.odCount = maxOd;
-    e.shared = Math.round((sharedCells / Math.max(e.pts.length, 1)) * 10) / 10;
-    e.widthM = maxOd >= 2 ? 5 : 3;
+    for (const e of edges) {
+      const seen = cellSetOf.get(e) ?? new Set<number>();
+      let sharedCells = 0;
+      let maxOd = 1;
+      for (const k of seen) {
+        const d = physDemand[k];
+        if (d >= 2) sharedCells++;
+        maxOd = Math.max(maxOd, d);
+      }
+      e.odCount = maxOd;
+      // 比例按**去重后的格数**算，不按采样点数
+      e.shared = Math.round((sharedCells / Math.max(seen.size, 1)) * 10) / 10;
+      e.widthM = maxOd >= 2 ? 5 : 3;
+    }
   }
   // 剪枝**不能剪掉某个目标的唯一连接** —— 一条 6 m 的短接驳如果它是进门的唯一一条，
   // 剪了就等于"入口连通"，但实际没路。原来 retail 就是这么从 ✓ 变 ✗ 的。
@@ -771,12 +1041,21 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
   const totalM = kept.reduce((s, e) => s + e.lengthM, 0);
   const mainM = kept.filter((e) => e.widthM >= 5).reduce((s, e) => s + e.lengthM, 0);
   const paveM2 = paths.reduce((s, p) => s + surfaceArea(p), 0) * 49;
-  const connected = targets.every((t) => kept.some((e) => e.to === t.id || e.from === t.id));
+  // 连通性按"目标是否真的接上了网"算，不再靠"还有没有一条边提到它" ——
+  // 后者会把"目标本来就在既有道路上"（没有新边）误判成不连通。
+  const connected = targets.every((t) => reachedTargets.has(t.id));
 
   return {
     nodes,
     edges: kept,
     paths,
+    unreachable,
+    adopted: adoptedAreas,
+    adoptedCells,
+    grid: (() => {
+      const g0 = grids.get('vehicle')?.g ?? grids.get('pedestrian')?.g;
+      return g0 ? { x0: g0.x0, y0: g0.y0, nx: g0.nx, ny: g0.ny } : undefined;
+    })(),
     stats: {
       solved: kept.length,
       totalM: +totalM.toFixed(1),
@@ -786,6 +1065,8 @@ export function solveCirculation(ctx: SiteContext, c: SitePlanCandidate): CirRes
       sharedRate: totalM > 0 ? +(sharedM / totalM).toFixed(2) : 0,
       sharedM: +sharedM.toFixed(1),
       connected,
+      odTotal: targets.length,
+      odConnected: reachedTargets.size,
       ms: +(performance.now() - t0).toFixed(1),
       cells,
     },

@@ -52,6 +52,20 @@ export interface RealizedSitePlan {
     stalls: number;
     aisles: number;
     angleDeg: number;
+    /** 实际用哪套求解器算出来的（legacy / placemaker） */
+    provider?: 'legacy' | 'placemaker';
+    /** 车道**面**面积 m² */
+    aisleM2?: number;
+    /** 景观岛个数 */
+    islandCount?: number;
+    /** 车道面连通分量（1 = 连成一片） */
+    aisleComps?: number;
+    /** 车位前缘落在车道面内的比例 */
+    frontRate?: number;
+    /** 停车区里转成景观的空地 m² */
+    lawnM2?: number;
+    /** 保留铺装但无明确功能（咽喉 / 碎片）的面积 m² */
+    deadPavingM2?: number;
   }[];
 }
 
@@ -90,6 +104,22 @@ export interface RealizationContext {
   buildable?: import('../planning/core/surface').PlanSurface;
   /** 退线带铺成什么 program（默认 landscape） */
   setbackProgram?: import('../planning/core/candidate').GroundProgram;
+  /**
+   * circulation 的来源（R1.3）。
+   *
+   * `legacy`（默认）= archetype 手画的固定直线；`solver` = R1 内部交通求解器。
+   * 两者对路面的要求不同：
+   *   · 裁剪体：solver 的路会走在退线带里，必须裁到**红线**；legacy 裁到 ground 并集；
+   *   · 中心线表达：solver 的路面已经由 realizeRoads 铺好，不再额外画一条
+   *     PathFeature（否则同一段路被画两遍：面 + 线）；
+   *   · 停车障碍：solver 的路要先从停车区里扣掉，车位不许压在路面上。
+   */
+  circulationMode?: 'legacy' | 'solver';
+  /**
+   * 停车求解器选择：legacy（现有求解器）/ placemaker（C# 离线烘焙）/ compare（两套都算，正式场景用 legacy）。
+   * 默认 legacy —— 生产行为不变。
+   */
+  parkingProvider?: 'legacy' | 'placemaker' | 'compare';
 }
 
 /** Ground Program → 材质（R1 的唯一映射表，场景代码里不许再散落 if/else） */

@@ -22,6 +22,7 @@ import { View2D, type DrawMode, type RoadPick, type SelKind } from './view2d';
 import { applySnapshot, decodeSnapshot, encodeSnapshot } from './snapshot';
 import { View3D } from './view3d';
 import { buildTownMeshes } from '../export/build3d';
+import { applyScalePreset, isScalePreset } from '../road/scale-preset';
 import { ROAD_SPECS, u } from '../road/spec';
 import {
   type TownParams,
@@ -115,6 +116,16 @@ interface State {
   params: TownParams;
   /** 图层显隐（scene/layers.ts 的 id → 可见） */
   vis: Record<string, boolean>;
+  /** 高亮地块内部道路（纯表现层，不参与生成与导出几何） */
+  hiliteLotRoad: boolean;
+  /** R1.4 内部交通开关：off / golden / all（本地开发默认 all） */
+  circulationMode: 'off' | 'golden' | 'all';
+  /** S1 场地布局骨架开关（默认 off，本轮只做三个 Golden 的方案对比） */
+  s1Mode: 'off' | 'golden' | 'all';
+  /** Pattern Registry 开关（与 s1 同构） */
+  patternMode: 'off' | 'golden' | 'all';
+  /** 停车求解器：legacy / placemaker / compare */
+  parkingProvider: 'legacy' | 'placemaker' | 'compare';
   /** 单块地块的手动覆盖（键 = patchKey），跟着种子一起保存到 localStorage */
   patchEdits: Map<string, PatchEdit>;
   /**
@@ -139,6 +150,11 @@ const state: State = {
     alleyWidth: u(ROAD_SPECS.local.redLine),
   },
   zones: [],
+  hiliteLotRoad: false,
+  circulationMode: 'all',
+  s1Mode: 'off',
+  patternMode: 'off',
+  parkingProvider: 'legacy',
   guides: [],
   guideStrength: 0.8,
   heightScale: 1,
@@ -158,6 +174,8 @@ let view3d: View3D | null = null;
 /** 三维镜头已经聚焦过的地块键：同一个地块不重复推镜头 */
 let focusedPatchKey: string | null = null;
 let currentView: '2d' | '3d' = '2d';
+/** 自动化截图用：`?patch` + `?zoom` 记下的地块中心，切到三维时让镜头跟过去 */
+let lastFocus: { x: number; y: number; span: number } | null = null;
 /** 当前在 2D 里点中的那条路（右栏"选中路"滑杆作用的对象） */
 let currentRoad: RoadPick | null = null;
 /** 最近一次体检结果（左栏 HUD 与图层计数都读它） */
@@ -294,6 +312,11 @@ function refresh3D(): void {
     heightScale: state.heightScale,
     layers: makeFilter(state.vis),
     planningMode: state.planningMode,
+    hiliteLotRoad: state.hiliteLotRoad,
+    circulation: state.circulationMode,
+    s1: state.s1Mode,
+    pattern: state.patternMode,
+    parkingProvider: state.parkingProvider,
   });
 }
 
@@ -314,8 +337,16 @@ function applyPlanningMode(mode: PlanningMode): void {
   document.querySelectorAll<HTMLButtonElement>('.mode-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.mode === mode)
   );
-  view2d.setSceneOptions({ planningMode: mode });
+  view2d.setSceneOptions({
+    planningMode: mode,
+    circulation: state.circulationMode,
+    s1: state.s1Mode,
+    pattern: state.patternMode,
+    parkingProvider: state.parkingProvider,
+  });
   view2d.draw();
+  // 图层计数跟着换过的场景重算（buildLeft 内部会重新绑一遍事件）
+  buildLeft();
   if (currentView === '3d') refresh3D();
   updateStats();
   updatePlannerHud();
@@ -444,6 +475,11 @@ function layerGroupHtml(g: LayerGroupDef, counts: Record<string, number>, withCo
         <b>${g.label}</b>
         <span class="cnt">${onCnt}/${g.items.length}${total !== null ? ` · ${total}` : ''}</span>
         <span class="mini">
+          ${
+            g.id === 'lotroad'
+              ? `<button data-hact="hilite" class="${state.hiliteLotRoad ? 'on' : ''}" title="把内部道路临时染成橙红，便于辨认">高亮</button>`
+              : ''
+          }
           <button data-gact="all" data-group="${g.id}">全显</button>
           <button data-gact="none" data-group="${g.id}">全隐</button>
         </span>
@@ -462,7 +498,9 @@ function layerGroupHtml(g: LayerGroupDef, counts: Record<string, number>, withCo
  * 已整块删除，`src/ui/hud.ts` 里只留 `diagnose`（左栏每行后面的数字靠它数）。
  */
 function buildLeft(): void {
-  const counts = diag?.layerCounts ?? {};
+  // 数字跟**当前渲染的场景**走：切到 Planner 之后地块内部多了几十块路面，
+  // 还用 boot 时 legacy 的计数就会出现"内部车行路面 0、画面上却有路"。
+  const counts = view2d?.layerCounts() ?? diag?.layerCounts ?? {};
   const sceneGroups = LAYER_GROUPS.map((g) => layerGroupHtml(g, counts, true)).join('');
   const overGroups = OVERLAY_GROUPS.map((g) => layerGroupHtml(g, counts, false)).join('');
 
@@ -511,6 +549,16 @@ function bindLeft(): void {
       state.vis[id] = el.checked;
       el.closest('.lyr-item')?.classList.toggle('off', !el.checked);
       onVisibilityChanged();
+    });
+  });
+
+  // 组级附加动作：目前只有「内部道路 → 高亮」
+  bar.querySelectorAll<HTMLButtonElement>('button[data-hact]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.hiliteLotRoad = !state.hiliteLotRoad;
+      btn.classList.toggle('on', state.hiliteLotRoad);
+      onVisibilityChanged();
+      toast(state.hiliteLotRoad ? '内部道路已高亮（橙红）' : '内部道路高亮已关闭');
     });
   });
 
@@ -566,6 +614,7 @@ function onVisibilityChanged(): void {
 /** 把 state.vis 铺到 View2D 的各开关上 */
 function applyViewFlags(): void {
   view2d.setLayerVisibility(makeFilter(state.vis));
+  view2d.hiliteLotRoad = state.hiliteLotRoad;
   view2d.showBlocks = vis('ov:blocks');
   view2d.showVertices = vis('ov:vertices');
   view2d.showZones = vis('ov:zones');
@@ -574,6 +623,11 @@ function applyViewFlags(): void {
   view2d.showCenterline = vis('ov:centerline');
   view2d.showJunctions = vis('ov:junctions');
   view2d.showUse = vis('ov:use');
+  view2d.showCirExisting = vis('ov:cir-existing');
+  view2d.showCirNew = vis('ov:cir-new');
+  view2d.showCirMerged = vis('ov:cir-merged');
+  view2d.showCirPortals = vis('ov:cir-portals');
+  view2d.showCirUnreachable = vis('ov:cir-unreachable');
   view2d.draw();
 }
 
@@ -1653,6 +1707,51 @@ function applyQueryParams(): void {
   const seed = num('seed');
   if (seed) state.seed = seed;
 
+  // ?hilite=1 默认打开「内部道路高亮」（截图 / 核对用，和 ?mode 同类）
+  if (p.get('hilite') === '1') state.hiliteLotRoad = true;
+
+  // ?cir=existing,new,merged,portals,unreach 打开 R1 诊断覆盖层（截图 / 核对用）
+  {
+    const raw = p.get('cir');
+    if (raw) {
+      const map: Record<string, string> = {
+        existing: 'ov:cir-existing',
+        new: 'ov:cir-new',
+        merged: 'ov:cir-merged',
+        portals: 'ov:cir-portals',
+        unreach: 'ov:cir-unreachable',
+      };
+      for (const part of raw.split(',')) {
+        const id = map[part.trim()];
+        if (id) state.vis[id] = true;
+      }
+    }
+  }
+
+  // ?circulation=off|golden|all —— R1.4 开关。默认 all（本地开发全城启用）
+  {
+    const c = p.get('circulation');
+    if (c === 'off' || c === 'golden' || c === 'all') state.circulationMode = c;
+  }
+
+  // ?s1=off|golden|all —— S1 场地布局骨架（截图对比用）
+  {
+    const v = p.get('s1');
+    if (v === 'off' || v === 'golden' || v === 'all') state.s1Mode = v;
+  }
+
+  // ?pattern=off|golden|all —— Pattern Registry 筛选
+  {
+    const v = p.get('pattern');
+    if (v === 'off' || v === 'golden' || v === 'all') state.patternMode = v;
+  }
+
+  // ?parkingProvider=legacy|placemaker|compare —— 停车求解器（placemaker 走离线烘焙表）
+  {
+    const v = p.get('parkingProvider');
+    if (v === 'legacy' || v === 'placemaker' || v === 'compare') state.parkingProvider = v;
+  }
+
   if (p.get('zone') === '1') {
     state.zones = [
       makeZone('demo-rect', '矩形禁区 1', {
@@ -1683,9 +1782,34 @@ function applyQueryParams(): void {
   }
 }
 
+/**
+ * `?scale=base|A|B|C` —— 道路断面 / 街区尺度的对照开关（诊断用，和 `?mode` 同类）。
+ *
+ * 必须在**第一次 createModel 之前**跑：Model 的路宽默认值就是从 ROAD_SPECS 取的，
+ * 晚一步就只能改到"下一次生成"，当前画面还是旧断面。
+ */
+function applyScaleFromQuery(): void {
+  const v = new URLSearchParams(location.search).get('scale');
+  if (!isScalePreset(v)) return;
+  const cfg = applyScalePreset(v);
+  if (cfg.spacingK !== undefined) state.params.block.spacingK = cfg.spacingK;
+  state.style = {
+    mainStreetWidth: u(ROAD_SPECS.arterial.redLine),
+    regularStreetWidth: u(ROAD_SPECS.collector.redLine),
+    alleyWidth: u(ROAD_SPECS.local.redLine),
+  };
+}
+
 function boot(): void {
   loadLayers();
-  if (!applyUrlParams()) applyQueryParams();
+  applyScaleFromQuery();
+  // hash 与 query 不是二选一：
+  //   `#s=` 是"这是哪座城"（seed / 断面 / 参数），
+  //   `?s1= ?pattern= ?parkingProvider= ?patch= ?zoom= ?view=` 是"这次怎么看、开哪个实验开关"。
+  // 早先写成 `if (!applyUrlParams()) applyQueryParams()` —— 只要 URL 带 `#s=`，
+  // query 全部失效，表现为"我加了 ?parkingProvider=placemaker，页面上一点变化都没有"。
+  applyUrlParams();
+  applyQueryParams();
 
   const canvas = $<HTMLCanvasElement>('#canvas2d');
 
@@ -1724,6 +1848,15 @@ function boot(): void {
     },
     onModeChanged: (mode) => syncModeButtons(mode),
   });
+  // 装配参数必须在第一次 draw 之前给：circulation 决定 Planner 跑不跑求解器，
+  // 而 2D / 3D / 导出都从同一份 Scene 取数
+  view2d.setSceneOptions({
+    planningMode: state.planningMode,
+    circulation: state.circulationMode,
+    s1: state.s1Mode,
+    pattern: state.patternMode,
+    parkingProvider: state.parkingProvider,
+  });
   view2d.setZones(state.zones);
   view2d.setGuides(state.guides);
   view2d.guideStrength = state.guideStrength;
@@ -1741,6 +1874,19 @@ function boot(): void {
       selectedPatchKey = patchKey(p);
       view2d.setSelectedPatch(p);
       view2d.draw();
+      // ?zoom=<px/单位> 把镜头拉到地块尺度（全城视图看不出路面、路缘、树）。
+      // 不给就是原来的全城视图，行为不变。
+      const zoom = Number(q.get('zoom') ?? 0);
+      if (zoom > 0) {
+        // ?cx=&cy= 直接给世界坐标中心（地块内部的要素常常不在地块中心，
+        // 比如内部道路贴着一条边 —— 验收要看的是路，不是地块重心）
+        const hasXY = q.has('cx') && q.has('cy');
+        const cx = hasXY ? Number(q.get('cx')) : p.shape.reduce((s, v) => s + v.x, 0) / p.shape.length;
+        const cy = hasXY ? Number(q.get('cy')) : p.shape.reduce((s, v) => s + v.y, 0) / p.shape.length;
+        lastFocus = { x: cx, y: cy, span: 420 / zoom };
+        view2d.focusOn(cx, cy, zoom);
+        view2d.draw();
+      }
       buildRight();
       $('#rightbar').scrollTop = 0;
     }
@@ -1778,6 +1924,15 @@ function boot(): void {
     const m = new URLSearchParams(location.search).get('mode');
     if (m === 'planner' || m === 'shadow' || m === 'legacy') applyPlanningMode(m);
     else updatePlannerHud();
+  }
+  // URL 参数 ?view=3d / ?view=2d（自动化截图用：不用点 tab 就能进三维）
+  {
+    const v = new URLSearchParams(location.search).get('view');
+    if (v === '3d' || v === '2d') switchView(v);
+    // 2D 那边已经 focusOn 到地块了，三维也要跟过去，否则截图还是一片全城
+    if (v === '3d' && lastFocus && view3d) {
+      view3d.focusOn(lastFocus.x, lastFocus.y, lastFocus.span);
+    }
   }
 
   document.addEventListener('keydown', (e) => {

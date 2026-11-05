@@ -13,7 +13,15 @@ import { buildScene } from '../scene/build';
 import type { PlannerBundle, PlanningMode } from '../scene/planner-bridge';
 import type { Scene } from '../scene/types';
 import { USE_COLOR, css, treeGreenCss } from '../scene/palette';
-import { layerOfPath, layerOfProp, layerOfSolid, layerOfSurface, type LayerId } from '../scene/layers';
+import {
+  hiliteMatOf,
+  isInternalRoadLayer,
+  layerOfPath,
+  layerOfProp,
+  layerOfSolid,
+  layerOfSurface,
+  type LayerId,
+} from '../scene/layers';
 import { USE_LABEL } from '../town/landuse';
 import type { LandUse } from '../scene/types';
 import {
@@ -141,6 +149,18 @@ export class View2D {
   /** 用地类型着色（按 LandUse 铺半透明色 + 标注） */
   showUse = false;
 
+  // ---- R1.4 内部交通诊断（只给开发核对用，默认全关）
+  /** 既有可通行道路（被并进网络的场地铺装） */
+  showCirExisting = false;
+  /** A* 新增连接（按交通类型着色） */
+  showCirNew = false;
+  /** 合并后的完整 PathGraph */
+  showCirMerged = false;
+  /** 入口与街区出口（按类型着色） */
+  showCirPortals = false;
+  /** 接不上的需求点（红叉 + 原因） */
+  showCirUnreachable = false;
+
   /**
    * 图层显隐过滤（scene/layers.ts 的 id）。
    * 场景本身永远是**全量生成**的，看不见的要素在绘制时跳过 ——
@@ -195,7 +215,18 @@ export class View2D {
   private scene: Scene | null = null;
   private sceneRev = -1;
   /** 场景开关：标线 / 街道设施 / 规划模式（R8） */
-  private sceneOpts: { markings?: boolean; furniture?: boolean; planningMode?: PlanningMode } = {};
+  private sceneOpts: {
+    markings?: boolean;
+    furniture?: boolean;
+    planningMode?: PlanningMode;
+    circulation?: 'off' | 'golden' | 'all';
+    s1?: 'off' | 'golden' | 'all';
+    pattern?: 'off' | 'golden' | 'all';
+    parkingProvider?: 'legacy' | 'placemaker' | 'compare';
+  } = {};
+
+  /** 高亮内部道路（纯表现层，不改场景数据） */
+  hiliteLotRoad = false;
 
   constructor(canvas: HTMLCanvasElement, model: Model, cb: View2DCallbacks) {
     this.canvas = canvas;
@@ -290,10 +321,41 @@ export class View2D {
   }
 
   /** 切换标线 / 街道设施 / 规划模式后调用 */
-  setSceneOptions(opts: { markings?: boolean; furniture?: boolean; planningMode?: PlanningMode }): void {
+  setSceneOptions(opts: {
+    markings?: boolean;
+    furniture?: boolean;
+    planningMode?: PlanningMode;
+    circulation?: 'off' | 'golden' | 'all';
+    s1?: 'off' | 'golden' | 'all';
+    pattern?: 'off' | 'golden' | 'all';
+    parkingProvider?: 'legacy' | 'placemaker' | 'compare';
+  }): void {
     this.sceneOpts = { ...this.sceneOpts, ...opts };
     this.scene = null;
     this.requestDraw();
+  }
+
+  /**
+   * 当前**实际渲染**的场景里，每个图层有多少个要素。
+   *
+   * 左栏每行后面的数字原来取的是 boot 时那一次 `diagnose()` 的结果 —— 切到
+   * Planner / Shadow 之后场面已经换了，数字却还是 legacy 的，于是"内部车行路面 0"
+   * 这种看着自相矛盾的行就出现了（画面上明明有内部路）。改成从当前场景现数。
+   */
+  layerCounts(): Record<string, number> {
+    const out: Record<string, number> = {};
+    let sc: Scene;
+    try {
+      sc = this.ensureScene();
+    } catch {
+      return out;
+    }
+    const bump = (id: string) => { out[id] = (out[id] ?? 0) + 1; };
+    for (const s of sc.surfaces) bump(layerOfSurface(s));
+    for (const s of sc.solids) bump(layerOfSolid(s));
+    for (const p of sc.props) bump(layerOfProp(p));
+    for (const p of sc.paths) bump(layerOfPath(p));
+    return out;
   }
 
   setZones(zones: Zone[]): void {
@@ -1154,6 +1216,105 @@ export class View2D {
     });
   }
 
+  /**
+   * R1.4 诊断图层：把求解器的完整网络画出来。
+   *
+   * 分五层不是炫技，是**必须分开看**：
+   *   · 既有可通行道路（蓝）—— 被并进网络的场地铺装，网络主体常常是它；
+   *   · A* 新增连接（橙）—— 真正由求解器铺出来的那几条，往往只是补丁；
+   *   · 合并后的完整网络 —— 两者叠在一起，才能回答"是不是一条连通的通路"；
+   *   · 入口（按交通类型分色）—— 街区出口 / 建筑门 / 停车口 / 后勤口；
+   *   · 接不上的需求点（红叉）—— 失败要看得见，不能只写进 warnings。
+   *
+   * 坐标已经在 draw() 里做过平移缩放，这里一律用世界单位。
+   */
+  private drawCirculationDebug(ctx: CanvasRenderingContext2D, px: number): void {
+    const b = this.plannerBundle;
+    if (!b) return;
+    const TRAFFIC: Record<string, string> = {
+      vehicle: '#e0762e',
+      service: '#8a5fb0',
+      pedestrian: '#2f8f9d',
+    };
+    const PORTAL: Record<string, string> = {
+      street: '#ffffff',
+      door: '#2f8f9d',
+      'service-door': '#8a5fb0',
+      parking: '#e0762e',
+    };
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    for (const [, d] of b.circulationDebug) {
+      // ① 既有可通行道路
+      if ((this.showCirExisting || this.showCirMerged) && d.adopted.length > 0) {
+        for (const a of d.adopted) {
+          ctx.beginPath();
+          this.tracePath(a.outer);
+          ctx.fillStyle = this.showCirMerged ? 'rgba(70,130,180,0.20)' : 'rgba(70,130,180,0.30)';
+          ctx.fill();
+          if (this.showCirExisting) {
+            ctx.strokeStyle = 'rgba(52,100,145,0.75)';
+            ctx.lineWidth = 0.55 * px;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // ② A* 新增连接 / ③ 合并后的完整网络
+      if (this.showCirNew || this.showCirMerged) {
+        for (const e of d.edges) {
+          if (e.pts.length < 2) continue;
+          ctx.strokeStyle = this.showCirMerged ? '#c85a1e' : (TRAFFIC[e.traffic] ?? '#e0762e');
+          // 屏幕线宽跟着真实路宽走，但保底 2 px，否则小城缩放后看不见
+          ctx.lineWidth = Math.max(1.6 * px, (e.widthM / 7) * 0.5);
+          ctx.beginPath();
+          ctx.moveTo(e.pts[0].x, e.pts[0].y);
+          for (let i = 1; i < e.pts.length; i++) ctx.lineTo(e.pts[i].x, e.pts[i].y);
+          ctx.stroke();
+        }
+      }
+
+      // ④ 入口与街区出口
+      if (this.showCirPortals) {
+        for (const n of d.nodes) {
+          const r = (n.kind === 'street' ? 3.4 : 2.8) * px;
+          ctx.beginPath();
+          ctx.arc(n.at.x, n.at.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = PORTAL[n.kind] ?? '#ffffff';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(20,18,15,0.85)';
+          ctx.lineWidth = 0.7 * px;
+          ctx.stroke();
+        }
+      }
+
+      // ⑤ 接不上的需求点
+      if (this.showCirUnreachable) {
+        for (const u of d.unreachable) {
+          const r = 4.2 * px;
+          ctx.strokeStyle = '#d8341f';
+          ctx.lineWidth = 1.4 * px;
+          ctx.beginPath();
+          ctx.moveTo(u.at.x - r, u.at.y - r);
+          ctx.lineTo(u.at.x + r, u.at.y + r);
+          ctx.moveTo(u.at.x + r, u.at.y - r);
+          ctx.lineTo(u.at.x - r, u.at.y + r);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(u.at.x, u.at.y, r * 1.5, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(216,52,31,0.55)';
+          ctx.lineWidth = 0.8 * px;
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
   draw(): void {
     this.ensureSize();
     const ctx = this.ctx;
@@ -1204,8 +1365,9 @@ export class View2D {
 
     const surfaces = scene.surfaces.slice().sort((a, b) => a.y - b.y);
     for (const s of surfaces) {
-      if (!this.vis(layerOfSurface(s))) continue;
-      ctx.fillStyle = css(s.mat);
+      const layer = layerOfSurface(s);
+      if (!this.vis(layer)) continue;
+      ctx.fillStyle = css(this.hiliteLotRoad && isInternalRoadLayer(layer) ? hiliteMatOf(layer) : s.mat);
       this.tracePath(s.ring);
       ctx.fill();
     }
@@ -1286,7 +1448,9 @@ export class View2D {
       // 栏杆被拆成上下两根横杆，俯视完全重合 —— 只画第一根，省一次描边
       if (p.hidden2d) continue;
       if (!this.vis(layerOfPath(p))) continue;
-      ctx.strokeStyle = css(p.mat);
+      ctx.strokeStyle = css(
+        this.hiliteLotRoad && isInternalRoadLayer(layerOfPath(p)) ? hiliteMatOf(layerOfPath(p)) : p.mat
+      );
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       if (p.height) {
@@ -1394,6 +1558,10 @@ export class View2D {
     // ---- 道路结构覆盖：红线 / 中线 / 路口点
     // 这三样是"读懂路网规则"的关键：红线告诉你每条路占多宽、中线告诉你等级分布、
     // 路口点告诉你连通性（顺带把断头路标成红叉）。
+    if (this.showCirExisting || this.showCirNew || this.showCirMerged || this.showCirPortals || this.showCirUnreachable) {
+      this.drawCirculationDebug(ctx, px);
+    }
+
     if (this.showRedline || this.showCenterline || this.showJunctions) {
       const net = this.roadNet();
       const hue: Record<string, string> = {

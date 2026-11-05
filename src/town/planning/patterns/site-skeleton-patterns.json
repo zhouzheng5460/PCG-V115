@@ -1,0 +1,4316 @@
+{
+  "schemaVersion": "0.1.0",
+  "name": "TownForge Site Skeleton Pattern Catalogue",
+  "compiledOn": "2026-11-04",
+  "legalNote": "Heuristic domain data (not building code). Original synthesis based on public documentation; not copied TestFit files or proprietary solver implementations.",
+  "units": "meter",
+  "coordinateRule": "Source SiteContext in 1 unit = 7 m; convert at adapter boundary, not in catalogue.",
+  "status": "CATALOGUE_ONLY_NOT_EXECUTABLE_GEOMETRY",
+  "sourceRefs": {
+    "TF_TYPOLOGIES": {
+      "title": "TestFit — Typologies",
+      "kind": "official_feature_docs",
+      "url": "https://www.testfit.io/typologies",
+      "license": "Proprietary reference; names/concepts only"
+    },
+    "TF_PARKING": {
+      "title": "TestFit — Parking Solver",
+      "kind": "official_feature_docs",
+      "url": "https://www.testfit.io/product/parking-solver",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_GARDEN_CIRC": {
+      "title": "TestFit — Garden circulation: Internal/Perimeter/External",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/how-can-i-adjust-the-circulation-type-of-a-garden-solve",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_GARDEN_PARAMS": {
+      "title": "TestFit — Garden Layer: row axis, connectors, max block, green fill",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/whats-in-the-garden-layer",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_INDUSTRIAL": {
+      "title": "TestFit — Industrial configurator presets",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/industrial/getting-started",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_CUSTOM_PRESET": {
+      "title": "TestFit — Presets: garage, docks, aisle, block length",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/creating-a-building-preset",
+      "license": "Proprietary reference; no code"
+    },
+    "URBGEN": {
+      "title": "UrbGEN — seven building footprint grammars + BCR/FAR",
+      "kind": "open_source",
+      "url": "https://github.com/trongtintr/UrbGEN",
+      "license": "MIT"
+    },
+    "PLT": {
+      "title": "ParkingLotTool — polygon lots, lanes, cross roads, perimeter paths, landscaping",
+      "kind": "open_source",
+      "url": "https://github.com/KruemelGames/ParkingLotTool",
+      "license": "GPL-3.0"
+    },
+    "PLACEMAKER": {
+      "title": "Placemaker — road/parking/parks/shop area generator",
+      "kind": "open_source",
+      "url": "https://github.com/jackwrichards/placemaker",
+      "license": "GPL-3.0"
+    },
+    "PARKSOLVER": {
+      "title": "ParkSolver — stripe-and-clip arbitrary-boundary parking",
+      "kind": "open_source",
+      "url": "https://github.com/ucalyptus/ParkSolver",
+      "license": "MIT"
+    },
+    "PLANX": {
+      "title": "PlanX Settlement — nine stage block/parcels/buildings/parking/landscape",
+      "kind": "open_source_workflow",
+      "url": "https://plugins.qgis.org/plugins/planx_yerlesim_plani_arac_seti/",
+      "license": "check individual plugin code before reuse"
+    }
+  },
+  "patterns": [
+    {
+      "id": "mf_perimeter_court",
+      "typology": "multi_family",
+      "labelZh": "围合庭院＋外围车行",
+      "labelEn": "Courtyard with perimeter circulation",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_GARDEN_CIRC",
+          "TF_TYPOLOGIES",
+          "URBGEN"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 4500,
+        "minEffectiveWidthM": 38,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "perimeter",
+        "buildingGrammar": "courtyard",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "shared_courtyard"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "perimeter",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "courtyard",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "courtyard",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "shared_courtyard",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "mf_internal_garden"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "mf_internal_garden",
+      "typology": "multi_family",
+      "labelZh": "花园住宅＋内部主轴",
+      "labelEn": "Garden housing with internal spine",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_GARDEN_CIRC",
+          "TF_GARDEN_PARAMS",
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 3000,
+        "minEffectiveWidthM": 28,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "internal_spine",
+        "buildingGrammar": "parallel_bars",
+        "parkingPatternIds": [
+          "pk_double_loaded"
+        ],
+        "openSpace": "continuous_green"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "internal_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "parallel_bars",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "parallel_bars",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_double_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "continuous_green",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "mf_single_side_spine"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "mf_external_rows",
+      "typology": "multi_family",
+      "labelZh": "多组团向街巷接入",
+      "labelEn": "External rows and shared connectors",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_GARDEN_CIRC",
+          "TF_GARDEN_PARAMS"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 6,
+        "maxConcavity": 0.95,
+        "minAreaM2": 6000,
+        "minEffectiveWidthM": 35,
+        "shapeHint": "multi_wing",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "external_rows",
+        "buildingGrammar": "parallel_bars",
+        "parkingPatternIds": [
+          "pk_multiwing_connectors"
+        ],
+        "openSpace": "green_courts"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "external_rows",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "parallel_bars",
+            "respectCorridor": true,
+            "allowMultipleZones": true
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "parallel_bars",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_multiwing_connectors"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "green_courts",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "mf_internal_garden"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "mf_podium_court",
+      "typology": "multi_family",
+      "labelZh": "裙房＋院落",
+      "labelEn": "Podium and courtyard",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "URBGEN"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.3,
+        "maxConcavity": 0.5,
+        "minAreaM2": 3500,
+        "minEffectiveWidthM": 34,
+        "shapeHint": "compact",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "internal_spine",
+        "buildingGrammar": "podium_courtyard",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "central_court"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "internal_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "podium_courtyard",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "podium_courtyard",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "central_court",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "mf_perimeter_court"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "mf_single_side_spine",
+      "typology": "multi_family",
+      "labelZh": "狭长单侧建筑组团",
+      "labelEn": "Narrow single-side spine",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_GARDEN_CIRC",
+          "URBGEN"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1.3,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.95,
+        "minAreaM2": 1800,
+        "minEffectiveWidthM": 19,
+        "shapeHint": "narrow",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "single_spine",
+        "buildingGrammar": "linear_bar",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "linear_green"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "single_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "linear_bar",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "linear_bar",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "linear_green",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "sf_shared_lane_rows",
+      "typology": "single_family",
+      "labelZh": "共享车道联排",
+      "labelEn": "Townhomes on shared lane",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1.3,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.95,
+        "minAreaM2": 1400,
+        "minEffectiveWidthM": 17,
+        "shapeHint": "narrow",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "single_spine",
+        "buildingGrammar": "row_housing",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "front_rear_yards"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "single_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "row_housing",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "row_housing",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "front_rear_yards",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "sf_street_frontage"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "sf_street_frontage",
+      "typology": "single_family",
+      "labelZh": "临街独栋＋院落",
+      "labelEn": "Street frontage houses",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 700,
+        "minEffectiveWidthM": 14,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "direct_frontage",
+        "buildingGrammar": "detached_houses",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "front_rear_yards"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "direct_frontage",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "detached_houses",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "detached_houses",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "front_rear_yards",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "sf_bungalow_courts",
+      "typology": "single_family",
+      "labelZh": "共享院落住宅",
+      "labelEn": "Bungalow court clusters",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "URBGEN"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.3,
+        "maxConcavity": 0.5,
+        "minAreaM2": 1600,
+        "minEffectiveWidthM": 23,
+        "shapeHint": "compact",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "pedestrian_court",
+        "buildingGrammar": "small_courts",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "shared_courtyard"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "pedestrian_court",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "small_courts",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "small_courts",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "shared_courtyard",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "sf_shared_lane_rows"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "retail_frontage_rear_park",
+      "typology": "retail",
+      "labelZh": "临街商业＋后场停车",
+      "labelEn": "Retail frontage with rear parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "TF_PARKING"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 2000,
+        "minEffectiveWidthM": 30,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "rear_spine",
+        "buildingGrammar": "linear_bar",
+        "parkingPatternIds": [
+          "pk_double_loaded"
+        ],
+        "openSpace": "entrance_plaza"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "rear_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "linear_bar",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "linear_bar",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_double_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "entrance_plaza",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "retail_pad_court"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "retail_anchor_parking_court",
+      "typology": "retail",
+      "labelZh": "主力店＋共享停车庭",
+      "labelEn": "Anchor retail with parking court",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "TF_PARKING",
+          "PLT"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.5,
+        "maxConcavity": 0.5,
+        "minAreaM2": 3500,
+        "minEffectiveWidthM": 42,
+        "shapeHint": "wide",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "central_aisles",
+        "buildingGrammar": "anchor_and_pads",
+        "parkingPatternIds": [
+          "pk_free_shape_multi_axis"
+        ],
+        "openSpace": "pedestrian_spine"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "central_aisles",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "anchor_and_pads",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "anchor_and_pads",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_free_shape_multi_axis"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "pedestrian_spine",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "retail_frontage_rear_park"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "retail_lifestyle_street",
+      "typology": "retail",
+      "labelZh": "步行商业街＋外围停车",
+      "labelEn": "Lifestyle retail street",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 6,
+        "maxConcavity": 0.95,
+        "minAreaM2": 4500,
+        "minEffectiveWidthM": 38,
+        "shapeHint": "multi_wing",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "pedestrian_mainstreet",
+        "buildingGrammar": "street_frontages",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "pedestrian_plaza"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "pedestrian_mainstreet",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "street_frontages",
+            "respectCorridor": true,
+            "allowMultipleZones": true
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "street_frontages",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "pedestrian_plaza",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "retail_frontage_rear_park"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "retail_strip_shared_park",
+      "typology": "retail",
+      "labelZh": "带状零售＋共享停车排",
+      "labelEn": "Strip retail + shared parking aisles",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "PARKSOLVER"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1.3,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.95,
+        "minAreaM2": 1800,
+        "minEffectiveWidthM": 28,
+        "shapeHint": "narrow",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "parallel_aisles",
+        "buildingGrammar": "linear_bar",
+        "parkingPatternIds": [
+          "pk_double_loaded"
+        ],
+        "openSpace": "entrance_plaza"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "parallel_aisles",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "linear_bar",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "linear_bar",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_double_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "entrance_plaza",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "retail_pad_court"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "retail_pad_court",
+      "typology": "retail",
+      "labelZh": "独立商业建筑＋小型停车",
+      "labelEn": "Pad retail + compact lot",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 800,
+        "minEffectiveWidthM": 17,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "single_spine",
+        "buildingGrammar": "single_pads",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "entrance_plaza"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "single_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "single_pads",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "single_pads",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "entrance_plaza",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "ind_single_loaded",
+      "typology": "industrial",
+      "labelZh": "单侧装卸厂房＋货场",
+      "labelEn": "Single loaded warehouse and yard",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_INDUSTRIAL",
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 2600,
+        "minEffectiveWidthM": 31,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "service_spine",
+        "buildingGrammar": "single_warehouse",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "landscape_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "truck",
+              "service"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "service_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "single_warehouse",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "single_warehouse",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "landscape_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "ind_infill_side"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "ind_crossdock",
+      "typology": "industrial",
+      "labelZh": "双侧装卸＋双货场",
+      "labelEn": "Cross dock with dual truck courts",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_INDUSTRIAL",
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.5,
+        "maxConcavity": 0.5,
+        "minAreaM2": 9000,
+        "minEffectiveWidthM": 67,
+        "shapeHint": "wide",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "dual_yard",
+        "buildingGrammar": "crossdock",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "landscape_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "truck",
+              "service"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "dual_yard",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "crossdock",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "crossdock",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "landscape_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "ind_single_loaded"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "ind_mixed_yard",
+      "typology": "industrial",
+      "labelZh": "多厂房＋共享货运庭",
+      "labelEn": "Mixed industrial yard",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_INDUSTRIAL"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 6,
+        "maxConcavity": 0.95,
+        "minAreaM2": 5000,
+        "minEffectiveWidthM": 42,
+        "shapeHint": "multi_wing",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "internal_spine",
+        "buildingGrammar": "warehouse_cluster",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "yard_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "truck",
+              "service"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "internal_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "warehouse_cluster",
+            "respectCorridor": true,
+            "allowMultipleZones": true
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "warehouse_cluster",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "yard_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "ind_single_loaded"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "ind_infill_side",
+      "typology": "industrial",
+      "labelZh": "狭长侧向货运通道",
+      "labelEn": "Industrial infill side service",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_INDUSTRIAL",
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1.3,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.95,
+        "minAreaM2": 1400,
+        "minEffectiveWidthM": 21,
+        "shapeHint": "narrow",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "single_side_yard",
+        "buildingGrammar": "single_warehouse",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "landscape_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "truck",
+              "service"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "single_side_yard",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "single_warehouse",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "single_warehouse",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "landscape_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "ind_perimeter_compound",
+      "typology": "industrial",
+      "labelZh": "外围货运＋集中厂房",
+      "labelEn": "Perimeter freight compound",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_INDUSTRIAL"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.3,
+        "maxConcavity": 0.5,
+        "minAreaM2": 4500,
+        "minEffectiveWidthM": 42,
+        "shapeHint": "compact",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "perimeter",
+        "buildingGrammar": "warehouse_cluster",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "landscape_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "truck",
+              "service"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "perimeter",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "warehouse_cluster",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "warehouse_cluster",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "landscape_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "ind_single_loaded"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "hotel_arrival_court",
+      "typology": "hotel",
+      "labelZh": "酒店落客院＋主楼",
+      "labelEn": "Hotel arrival court",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.3,
+        "maxConcavity": 0.5,
+        "minAreaM2": 2000,
+        "minEffectiveWidthM": 28,
+        "shapeHint": "compact",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "dropoff_loop",
+        "buildingGrammar": "podium_bar",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "arrival_court"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "dropoff_loop",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "podium_bar",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "podium_bar",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "arrival_court",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "hotel_linear_front"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "hotel_linear_front",
+      "typology": "hotel",
+      "labelZh": "临街酒店＋侧边落客",
+      "labelEn": "Hotel frontage with side dropoff",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1.3,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.95,
+        "minAreaM2": 1200,
+        "minEffectiveWidthM": 18,
+        "shapeHint": "narrow",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "single_spine",
+        "buildingGrammar": "linear_bar",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "entrance_plaza"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "single_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "linear_bar",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "linear_bar",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "entrance_plaza",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "hotel_gurban_court",
+      "typology": "hotel",
+      "labelZh": "庭院旅馆＋地面停车",
+      "labelEn": "Garden hotel with surface parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "TF_GARDEN_CIRC"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 3800,
+        "minEffectiveWidthM": 33,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "internal_spine",
+        "buildingGrammar": "parallel_bars",
+        "parkingPatternIds": [
+          "pk_double_loaded"
+        ],
+        "openSpace": "shared_courtyard"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "internal_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "parallel_bars",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "parallel_bars",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_double_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "shared_courtyard",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "hotel_arrival_court"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "dc_single_hall",
+      "typology": "data_center",
+      "labelZh": "单数据大厅＋设备场",
+      "labelEn": "Single data hall with utility yard",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 3000,
+        "minEffectiveWidthM": 32,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "service_spine",
+        "buildingGrammar": "single_hall",
+        "parkingPatternIds": [
+          "pk_single_loaded"
+        ],
+        "openSpace": "security_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "service_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "single_hall",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "single_hall",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_single_loaded"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "security_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "dc_campus_axis",
+      "typology": "data_center",
+      "labelZh": "多数据大厅＋服务轴",
+      "labelEn": "Data campus with utility spine",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 2.5,
+        "maxConcavity": 0.5,
+        "minAreaM2": 11000,
+        "minEffectiveWidthM": 70,
+        "shapeHint": "wide",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "internal_spine",
+        "buildingGrammar": "multi_halls",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "security_buffer"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "internal_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "multi_halls",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "multi_halls",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "security_buffer",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "dc_single_hall"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "civic_plaza_front",
+      "typology": "civic",
+      "labelZh": "公共建筑＋入口广场",
+      "labelEn": "Civic front plaza",
+      "provenance": {
+        "basisSourceIds": [
+          "PLANX"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 1100,
+        "minEffectiveWidthM": 22,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "pedestrian_axis",
+        "buildingGrammar": "single_hall",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "entrance_plaza"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "pedestrian_axis",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "single_hall",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "single_hall",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "entrance_plaza",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "civic_campus_green",
+      "typology": "civic",
+      "labelZh": "公共建筑组团＋共享绿心",
+      "labelEn": "Civic campus and green core",
+      "provenance": {
+        "basisSourceIds": [
+          "PLANX",
+          "URBGEN"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 6,
+        "maxConcavity": 0.95,
+        "minAreaM2": 3800,
+        "minEffectiveWidthM": 39,
+        "shapeHint": "multi_wing",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "pedestrian_spine",
+        "buildingGrammar": "campus_clusters",
+        "parkingPatternIds": [
+          "pk_edge_offset"
+        ],
+        "openSpace": "central_court"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "parking_zone",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian",
+              "vehicle"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "pedestrian_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "campus_clusters",
+            "respectCorridor": true,
+            "allowMultipleZones": true
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "campus_clusters",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "reserve_parking",
+          "args": {
+            "patternIds": [
+              "pk_edge_offset"
+            ],
+            "pinEntryToSkeleton": true,
+            "solver": "provider"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "central_court",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "civic_plaza_front"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "park_lawn_loop",
+      "typology": "park",
+      "labelZh": "环形游园步道＋大草坪",
+      "labelEn": "Park loop and lawn",
+      "provenance": {
+        "basisSourceIds": [
+          "PLANX"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 1500,
+        "minEffectiveWidthM": 20,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "pedestrian_loop",
+        "buildingGrammar": "none",
+        "parkingPatternIds": [],
+        "openSpace": "main_lawn"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "pedestrian_loop",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "main_lawn",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "park_path_spine"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "park_path_spine",
+      "typology": "park",
+      "labelZh": "主步道＋活动节点",
+      "labelEn": "Park spine with activity nodes",
+      "provenance": {
+        "basisSourceIds": [
+          "PLANX"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1.3,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.95,
+        "minAreaM2": 350,
+        "minEffectiveWidthM": 9,
+        "shapeHint": "narrow",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "pedestrian_spine",
+        "buildingGrammar": "none",
+        "parkingPatternIds": [],
+        "openSpace": "lawn_pockets"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "pedestrian_spine",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "lawn_pockets",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "green_continuous"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "green_continuous",
+      "typology": "green",
+      "labelZh": "连续生态绿地＋少量步道",
+      "labelEn": "Continuous green buffer",
+      "provenance": {
+        "basisSourceIds": [
+          "PLANX"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 100,
+        "minEffectiveWidthM": 3,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "minimal_paths",
+        "buildingGrammar": "none",
+        "parkingPatternIds": [],
+        "openSpace": "continuous_green"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "minimal_paths",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "continuous_green",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": "generic_simple_infill"
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    },
+    {
+      "id": "generic_simple_infill",
+      "typology": "generic",
+      "labelZh": "最小可行空间组织",
+      "labelEn": "Minimal compliant infill",
+      "provenance": {
+        "basisSourceIds": [
+          "URBGEN",
+          "PLANX"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored rule specification; not vendor preset or extracted algorithm"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "requires": [
+          "geometry_adapters",
+          "site_skeleton_adapter",
+          "candidate_evaluator"
+        ],
+        "notProductionReady": true
+      },
+      "fit": {
+        "minAspectRatio": 1,
+        "maxAspectRatio": 12,
+        "maxConcavity": 0.99,
+        "minAreaM2": 100,
+        "minEffectiveWidthM": 4,
+        "shapeHint": "irregular_ok",
+        "acceptsHole": true,
+        "areaNote": "Only exploratory selector thresholds, not legal/site-design minima"
+      },
+      "signature": {
+        "circulation": "minimal_access",
+        "buildingGrammar": "single_pad",
+        "parkingPatternIds": [],
+        "openSpace": "residual_green"
+      },
+      "zonePriority": [
+        "gates",
+        "circulation",
+        "building_zones",
+        "open_space",
+        "residual"
+      ],
+      "operators": [
+        {
+          "op": "analyze_site",
+          "args": {
+            "useActualPolygonWidth": true,
+            "measureFrontages": true,
+            "includeHoles": true
+          }
+        },
+        {
+          "op": "reserve_gates",
+          "args": {
+            "lockToLegalFrontage": true,
+            "kinds": [
+              "pedestrian"
+            ]
+          }
+        },
+        {
+          "op": "reserve_circulation",
+          "args": {
+            "layout": "minimal_access",
+            "mustConnectGate": true,
+            "mustBeTrafficTypeAware": true,
+            "shapeAdaptation": "clip_within_site"
+          }
+        },
+        {
+          "op": "reserve_building_zones",
+          "args": {
+            "grammar": "single_pad",
+            "respectCorridor": true,
+            "allowMultipleZones": false
+          }
+        },
+        {
+          "op": "place_building_grammar",
+          "args": {
+            "grammar": "single_pad",
+            "alignTo": "frontage_or_main_axis",
+            "respectActualWidth": true
+          }
+        },
+        {
+          "op": "allocate_open_space",
+          "args": {
+            "model": "residual_green",
+            "preferContinuousRegions": true,
+            "turnNarrowRemnantsInto": "landscape"
+          }
+        },
+        {
+          "op": "validate_layout",
+          "args": {
+            "checkPhysicalSurfaceConnectivity": true,
+            "checkClearance": true,
+            "checkOverlap": true,
+            "checkSemanticEntrance": true
+          }
+        }
+      ],
+      "adaptation": {
+        "prefer": [
+          "edge_aligned_frame",
+          "per_depth_width_sampling",
+          "polygon_inset",
+          "polygon_boolean",
+          "multiple_candidate_axes"
+        ],
+        "forConcavity": "separate_simple_wings_then_link_without_bypassing_obstacles",
+        "forTaper": "shorten_rows_and_keep_wedge_green",
+        "forHoles": "subtract_holes_before_layout_and_validate_each_connected_area",
+        "fallbackPatternId": null
+      },
+      "hardChecks": [
+        "within_legal_parcel",
+        "footprint_no_overlap",
+        "width_clearance_enforced",
+        "access_and_aisle_face_continuity",
+        "building_entrance_connectivity",
+        "parking_bay_access_when_required"
+      ],
+      "visualMetrics": [
+        "building_alignment",
+        "circulation_simplicity",
+        "green_continuity",
+        "space_fragmentation",
+        "entrance_legibility"
+      ],
+      "notesZh": "仅作为候选骨架；不能直接当 SceneIR。具体建筑数量、净空、停车尺寸应从现有规划与合法约束计算。"
+    }
+  ]
+}

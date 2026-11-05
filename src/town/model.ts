@@ -53,6 +53,10 @@ export interface ModelOptions {
   zones?: Zone[];
   style?: Partial<TownStyle>;
   plaza?: boolean;
+  /** 圆内格子数下限（默认 36）。调小可以让 spacingK 真正生效，用于街区尺度对照 */
+  minCells?: number;
+  /** 每边格数下限（默认 3）。放到 2 才能让街区真的变大，见 grid.ts 的 minN */
+  minN?: number;
   /** 地块被禁建区覆盖超过该比例就整块不出内容 */
   zoneBlockThreshold?: number;
   /** 街网形态：方格网 / 场线 / 放射环 / 张量场 */
@@ -134,6 +138,9 @@ function boxesOverlap(a: Box, b: Box): boolean {
 
 /** 全局切分刀数上限：大地图上布尔运算次数会爆炸，这里给它封顶 */
 const MAX_SUBDIVIDES = 300;
+
+/** `spacingK` 的默认值。街区尺度连续缩放以它为锚（k = K_REF 时乘 1，城市不变） */
+const K_REF = 1.5;
 
 /**
  * 用等距平行带把多边形切成若干条，按面积降序返回（第一片是最大的）。
@@ -280,6 +287,35 @@ export class Model {
   edgeClass = new Map<string, EdgeClass>();
 
   /**
+   * `smoothRoadClass()` **执行前**的等级快照（只读诊断用）。
+   *
+   * 等级平滑会批量升级长链路上的支路，"改了多少条、从什么等级变成什么"是尺度
+   * 诊断的必答项，但平滑之后原值就没了。这里在平滑入口存一份，不参与任何逻辑。
+   */
+  roadClassRaw: Map<string, EdgeClass> = new Map();
+
+  /** 大块地二次切分的计数（只读诊断用）：切前/切后地块数、新增边数 */
+  splitStats = { before: 0, after: 0, newEdges: 0 };
+
+  /**
+   * 圆内格子数下限（默认 36）。
+   *
+   * `cells = max(minCells, nPatches*5/k²)`。36 是"环形布局最外圈还能闭合"的经验
+   * 下限，但它会把 `spacingK` 架空（k=1.5 时 75/2.25=33 < 36）。做街区尺度对照时
+   * 允许调到更小，默认值不变。
+   */
+  minCells: number;
+
+  /**
+   * 每边格数下限（默认 3）。
+   *
+   * 即使把 minCells 调小，`grid.ts` 里还有一道 `n = max(3, round(√(cells/π)))`，
+   * 而街区尺度 `S = R/n` 只认 n —— 所以只要 n 被夹在 3，spacingK 就是死参数。
+   * 放到 2 才能让"放大街区"真的生效（尺度对照用）。
+   */
+  minN: number;
+
+  /**
    * 地块内部路的**出入口**（世界坐标矩形）。
    *
    * 封闭地块的内部路必须真的接到外部车行道上，而不是"两块沥青在图上叠着"。
@@ -347,6 +383,8 @@ export class Model {
 
   constructor(opts: ModelOptions = {}) {
     this.nPatches = opts.nPatches ?? 15;
+    this.minCells = opts.minCells ?? 36;
+    this.minN = opts.minN ?? 3;
     this.seed = opts.seed ?? -1;
     this.zones = opts.zones ?? [];
     this.zoneBlockThreshold = opts.zoneBlockThreshold ?? 0.35;
@@ -476,6 +514,7 @@ export class Model {
   private subdivideLargePatches(): void {
     const inner = this.patches.filter((p) => p.withinCity);
     if (inner.length < 6) return;
+    this.splitStats = { before: this.patches.length, after: this.patches.length, newEdges: 0 };
     const areas = inner.map((p) => area(Array.from(p.shape))).sort((a, b) => a - b);
     const med = areas[Math.floor(areas.length / 2)];
     if (!(med > 0.5)) return;
@@ -544,13 +583,15 @@ export class Model {
 
     // 新切出来的边没有等级记录 → 一律支路。
     // 不写的话 roadClassOf 会退到 'local'，结果一样，但显式登记便于单条路宽编辑按 key 生效。
+    let newEdges = 0;
     for (const patch of this.patches) {
       const ring = Array.from(patch.shape);
       for (let i = 0; i < ring.length; i++) {
         const key = edgeKey(ring[i], ring[(i + 1) % ring.length]);
-        if (!this.edgeClass.has(key)) this.edgeClass.set(key, 'local');
+        if (!this.edgeClass.has(key)) { this.edgeClass.set(key, 'local'); newEdges++; }
       }
     }
+    this.splitStats = { before: this.splitStats.before, after: this.patches.length, newEdges };
 
     this.inner = this.patches.filter((p) => p.withinCity);
   }
@@ -769,11 +810,17 @@ export class Model {
     // 占掉 34% 面积，看起来就像"地块压在路上"。
     // 真实小城的街区是 100~150 m，退让只占 10~15%。
     const k = this.params.block.spacingK;
-    const cells = Math.max(36, Math.round((this.nPatches * 5) / (k * k)));
+    // 下限可配：36 是"环形布局最外圈还能闭合"的经验值，但 k 稍大就会把
+    // spacingK 整个架空（75/k² < 36 → 街区被钉死在 156 m）。做尺度对照时
+    // 需要能把它放开看，默认仍是 36，行为不变。
+    const minCells = this.minCells;
+    const cells = Math.max(minCells, Math.round((this.nPatches * 5) / (k * k)));
     const radius = 42 + this.nPatches * 1.9;
     const grid = buildGridLayout({
       cells,
       radius,
+      minN: this.minN,
+      spacingMul: k / K_REF,
       layout: this.layout,
       warp: 0.65,
       // tensor 布局下禁建区轮廓会作为方向场源参与合成（zoneAvoid 关时），
@@ -817,6 +864,8 @@ export class Model {
   private smoothRoadClass(): void {
     const cls = this.edgeClass;
     if (cls.size === 0 || this.patches.length === 0) return;
+    // 诊断用快照：平滑之后原等级就没了，先存一份（不参与逻辑）
+    this.roadClassRaw = new Map(cls);
 
     interface E {
       a: Pt;

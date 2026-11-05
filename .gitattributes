@@ -1,1 +1,11 @@
 * text=auto
+
+# 二进制产物：显式标记，避免被 text=auto 误判后做换行转换
+*.dll binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.glb binary
+
+# 烘焙产物：生成文件，换行保持原样（不要做 CRLF 转换）
+src/town/parking/baked/layouts.json -text

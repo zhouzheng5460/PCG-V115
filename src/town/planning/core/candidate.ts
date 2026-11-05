@@ -116,6 +116,15 @@ export interface PlannedPath {
   pts: Pt[];
   width: number;
   role: 'vehicle' | 'truck' | 'pedestrian';
+  /**
+   * 这条中心线是谁定的（**可选，不改已有字段语义**）。
+   *
+   * - `archetype`（默认，缺省即此）：archetype 手画的固定直线，Realizer 既铺路面
+   *   又画一条中心线（PathFeature），这是历史行为；
+   * - `solver`：R1 内部交通求解器算出来的，路面由 `realizeRoads` 铺，
+   *   **不再额外画一条 PathFeature** —— 否则同一段路会被画两次（面 + 线）。
+   */
+  source?: 'archetype' | 'solver' | 'skeleton';
 }
 
 /** 停车需求（**不含车位**，只声明区域与入口） */

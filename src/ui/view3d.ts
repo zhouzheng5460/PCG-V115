@@ -93,6 +93,14 @@ export class View3D {
       layers?: (id: string) => boolean;
       /** 规划模式（R8）：planner / shadow 走 Planner 链路 */
       planningMode?: PlanningMode;
+      /** 高亮地块内部道路（与 2D 同一套判定） */
+      hiliteLotRoad?: boolean;
+      /** R1.4 内部交通开关：off / golden / all */
+      circulation?: 'off' | 'golden' | 'all';
+      /** S1 场地布局骨架：off / golden / all */
+      s1?: 'off' | 'golden' | 'all';
+      pattern?: 'off' | 'golden' | 'all';
+      parkingProvider?: 'legacy' | 'placemaker' | 'compare';
     } = {}
   ): void {
     this.clear();
@@ -103,6 +111,11 @@ export class View3D {
       furniture: opts.furniture ?? true,
       layers: opts.layers,
       planningMode: opts.planningMode ?? 'legacy',
+      hiliteLotRoad: opts.hiliteLotRoad ?? false,
+      circulation: opts.circulation ?? 'all',
+      s1: opts.s1 ?? 'off',
+      pattern: opts.pattern ?? 'off',
+      parkingProvider: opts.parkingProvider ?? 'legacy',
     });
     const matCache = new Map<string, THREE.MeshStandardMaterial>();
 

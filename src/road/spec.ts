@@ -10,7 +10,7 @@
 // 街区中位边长 ≈ 85 m。这是"居住区 / 街坊"级别的尺度，主干道按 40 m 红线切
 // 会把 85 m 的街区吃掉一半、城市直接散架。所以本表把规范里的**构成比例**搬到
 // 这个尺度上：车道宽、人行道最小宽、绿化带宽、转弯半径都按真实米数取，
-// 只把"红线总宽"落在 10.5 / 15 / 24 m 这三档（对应居住区道路 / 支路 / 次干路）。
+// 只把"红线总宽"落在 10.5 / 18 / 24 m 这三档（支路 / 次干路 / 主干路）。
 // 每一档都能对上规范里相应等级的最小值，而不是随手拍的百分比。
 
 import { clamp } from '../scene/types';
@@ -74,16 +74,20 @@ export const ROAD_SPECS: Record<RoadClass, RoadSpec> = {
     cls: 'arterial',
     label: '主干路',
     short: '主',
-    // 双向六车道：6 × 3.5 = 21 m 车行道 + 两侧各 2.4 m 人行道 + 1.3 m 绿化带 = 28 m
-    redLine: 28,
-    minRedLine: 24,
+    // 双向四车道：4 × 3.5 = 14 m 车行道 + 两侧各 3.5 m 人行道 + 1.5 m 绿化带 = 24 m
+    //
+    // 原来是 28 m / 六车道。在这个尺度（街区中位短边 107 m）上，六车道没有交通量
+    // 支撑，却让每条主干道吃掉街区四分之一的边 —— 城市读起来像"被宽路围住的小岛"。
+    // 降到四车道后车行道 14 m 仍然富余，人行道反而更宽（3.5 m），更像街道。
+    redLine: 24,
+    minRedLine: 20,
     designSpeed: 40,
-    lanes: 6,
+    lanes: 4,
     laneWidth: 3.5,
-    sidewalk: 2.4,
-    verge: 1.3,
+    sidewalk: 3.5,
+    verge: 1.5,
     median: 0,
-    cornerRadius: 18,
+    cornerRadius: 12,
     crossing: true,
     streetFurniture: true,
     treeSpacing: 8,
@@ -93,16 +97,16 @@ export const ROAD_SPECS: Record<RoadClass, RoadSpec> = {
     cls: 'collector',
     label: '次干路',
     short: '次',
-    // 双向四车道：4 × 3.5 = 14 m 车行道 + 两侧各 2.0 m 人行道 + 1.0 m 绿化带 = 20 m
-    redLine: 20,
-    minRedLine: 17,
+    // 双向四车道：4 × 3.25 = 13 m 车行道 + 两侧各 2.0 m 人行道 + 0.5 m 绿化带 = 18 m
+    redLine: 18,
+    minRedLine: 15,
     designSpeed: 30,
     lanes: 4,
-    laneWidth: 3.5,
+    laneWidth: 3.25,
     sidewalk: 2.0,
-    verge: 1.0,
+    verge: 0.5,
     median: 0,
-    cornerRadius: 12,
+    cornerRadius: 9,
     crossing: true,
     streetFurniture: true,
     treeSpacing: 8,

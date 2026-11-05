@@ -26,6 +26,11 @@ export const MF_GROUND_WHITELIST: GroundProgram[] = [
   'landscape',
   'service',
   'residual',
+  // S1（场地布局骨架）：**场地内部的机动车主通道**。
+  // 复用 `driveway` 而不是新造一个 program —— 它在 ground-ownership 里
+  // 已经是优先级最高（100）的 overlay，天然压过绿地和停车，
+  // 语义也正是"地块内的车道"。
+  'driveway',
 ];
 
 /** 院子最小净尺寸（米）——小于这个值就不是院子，是天井 */

@@ -1,0 +1,940 @@
+{
+  "schemaVersion": "0.1.0",
+  "name": "TownForge Parking Subpatterns",
+  "status": "CATALOGUE_ONLY_NOT_EXECUTABLE_GEOMETRY",
+  "units": "meter",
+  "sourceRefs": {
+    "TF_TYPOLOGIES": {
+      "title": "TestFit — Typologies",
+      "kind": "official_feature_docs",
+      "url": "https://www.testfit.io/typologies",
+      "license": "Proprietary reference; names/concepts only"
+    },
+    "TF_PARKING": {
+      "title": "TestFit — Parking Solver",
+      "kind": "official_feature_docs",
+      "url": "https://www.testfit.io/product/parking-solver",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_GARDEN_CIRC": {
+      "title": "TestFit — Garden circulation: Internal/Perimeter/External",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/how-can-i-adjust-the-circulation-type-of-a-garden-solve",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_GARDEN_PARAMS": {
+      "title": "TestFit — Garden Layer: row axis, connectors, max block, green fill",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/whats-in-the-garden-layer",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_INDUSTRIAL": {
+      "title": "TestFit — Industrial configurator presets",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/industrial/getting-started",
+      "license": "Proprietary reference; no code"
+    },
+    "TF_CUSTOM_PRESET": {
+      "title": "TestFit — Presets: garage, docks, aisle, block length",
+      "kind": "official_feature_docs",
+      "url": "https://support.testfit.io/knowledge/creating-a-building-preset",
+      "license": "Proprietary reference; no code"
+    },
+    "URBGEN": {
+      "title": "UrbGEN — seven building footprint grammars + BCR/FAR",
+      "kind": "open_source",
+      "url": "https://github.com/trongtintr/UrbGEN",
+      "license": "MIT"
+    },
+    "PLT": {
+      "title": "ParkingLotTool — polygon lots, lanes, cross roads, perimeter paths, landscaping",
+      "kind": "open_source",
+      "url": "https://github.com/KruemelGames/ParkingLotTool",
+      "license": "GPL-3.0"
+    },
+    "PLACEMAKER": {
+      "title": "Placemaker — road/parking/parks/shop area generator",
+      "kind": "open_source",
+      "url": "https://github.com/jackwrichards/placemaker",
+      "license": "GPL-3.0"
+    },
+    "PARKSOLVER": {
+      "title": "ParkSolver — stripe-and-clip arbitrary-boundary parking",
+      "kind": "open_source",
+      "url": "https://github.com/ucalyptus/ParkSolver",
+      "license": "MIT"
+    },
+    "PLANX": {
+      "title": "PlanX Settlement — nine stage block/parcels/buildings/parking/landscape",
+      "kind": "open_source_workflow",
+      "url": "https://plugins.qgis.org/plugins/planx_yerlesim_plani_arac_seti/",
+      "license": "check individual plugin code before reuse"
+    }
+  },
+  "patterns": [
+    {
+      "id": "pk_double_loaded",
+      "labelZh": "双面停车排填充",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "PARKSOLVER"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "double_loaded"
+      },
+      "layout": {
+        "topology": "parallel_aisles_with_cross_connectors",
+        "rowMode": "two_sided",
+        "placementMethod": "stripe_sweep",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": false,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "parallel_aisles_with_cross_connectors"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "two_sided",
+            "method": "stripe_sweep"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_single_loaded",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_single_loaded",
+      "labelZh": "单侧停车排与主通道",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "PARKSOLVER"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "single_loaded"
+      },
+      "layout": {
+        "topology": "single_spine",
+        "rowMode": "single_sided",
+        "placementMethod": "stripe_sweep",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": false,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "single_spine"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "single_sided",
+            "method": "stripe_sweep"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_minimal_pad",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_edge_offset",
+      "labelZh": "外围通道与内部停车组团",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "PLT"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "perimeter_offset"
+      },
+      "layout": {
+        "topology": "perimeter_loop_if_feasible",
+        "rowMode": "mixed",
+        "placementMethod": "offset_region",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": false,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "perimeter_loop_if_feasible"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "mixed",
+            "method": "offset_region"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_single_loaded",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_free_shape_multi_axis",
+      "labelZh": "多边形分组旋转停车排",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_TYPOLOGIES",
+          "PARKSOLVER",
+          "PLT"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "free_shape"
+      },
+      "layout": {
+        "topology": "connected_multiple_wings",
+        "rowMode": "two_sided",
+        "placementMethod": "multi_axis_sweep",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": true,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "connected_multiple_wings"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "two_sided",
+            "method": "multi_axis_sweep"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_double_loaded",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_landscaped_loop",
+      "labelZh": "双通道环通＋景观岛",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_GARDEN_PARAMS",
+          "PLT"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 1400,
+        "shapeHint": "landscaped_loop"
+      },
+      "layout": {
+        "topology": "closed_loop_required",
+        "rowMode": "two_sided",
+        "placementMethod": "aisles_first_then_stalls",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": false,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "closed_loop_required"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "two_sided",
+            "method": "aisles_first_then_stalls"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_double_loaded",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_multiwing_connectors",
+      "labelZh": "多翼区连接通道",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_GARDEN_PARAMS",
+          "PLT"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "irregular_connectors"
+      },
+      "layout": {
+        "topology": "cross_aisle_connectors",
+        "rowMode": "two_sided",
+        "placementMethod": "connect_wings",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": true,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "cross_aisle_connectors"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "two_sided",
+            "method": "connect_wings"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_single_loaded",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_angled_oneway",
+      "labelZh": "单向斜列停车",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "PARKSOLVER"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "angled_oneway"
+      },
+      "layout": {
+        "topology": "directed_oneway_with_legal_exit",
+        "rowMode": "angled",
+        "placementMethod": "angle_sweep",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": false,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "directed_oneway_with_legal_exit"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "angled",
+            "method": "angle_sweep"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": "pk_single_loaded",
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    },
+    {
+      "id": "pk_minimal_pad",
+      "labelZh": "小型停车口袋",
+      "family": "surface_parking",
+      "provenance": {
+        "basisSourceIds": [
+          "TF_PARKING",
+          "PARKSOLVER"
+        ],
+        "relationship": "derived_composition",
+        "status": "TownForge-authored geometry recipe; not upstream implementation"
+      },
+      "implementation": {
+        "state": "declarative_only",
+        "preferredProvider": "placemaker_csharp_for_ab",
+        "fallbackProvider": "townforge_legacy",
+        "providerCapabilityMustBeProbed": true
+      },
+      "siteFit": {
+        "acceptsIrregularPolygon": true,
+        "acceptsHolesWithPreprocessing": true,
+        "minAreaM2": 300,
+        "shapeHint": "small_pad"
+      },
+      "layout": {
+        "topology": "one_aisle_with_turnaround",
+        "rowMode": "single_sided",
+        "placementMethod": "small_polygon_packing",
+        "mustConnectAllAisles": true,
+        "mustReachAllStallFrontages": true,
+        "entryPinned": true,
+        "resolveAnglesDeg": [
+          0,
+          30,
+          45,
+          60,
+          90
+        ],
+        "allowMultiAxis": false,
+        "turnaroundRule": "prove_vehicle_clearance_or_reject",
+        "greenIslands": true,
+        "greenIslandRule": "at_row_ends_or_stall_group_intervals_not_across_aisle"
+      },
+      "parameterPolicy": {
+        "stallWidthM": {
+          "default": 2.5,
+          "editable": true
+        },
+        "stallDepthM": {
+          "default": 5.0,
+          "editable": true
+        },
+        "aisleWidthM": {
+          "default": 6,
+          "editable": true
+        },
+        "landscapeIslandMinWidthM": {
+          "default": 2.4,
+          "editable": true
+        },
+        "connectorSpacingM": {
+          "default": 40,
+          "editable": true
+        },
+        "maxUnconnectedComponents": 0,
+        "note": "Exploratory layout defaults only; replace with applicable local code and vehicle design constraints. Angled stalls require angle-specific geometry and one-way travel."
+      },
+      "operators": [
+        {
+          "op": "subtract_obstacles_and_holes"
+        },
+        {
+          "op": "pick_layout_axes"
+        },
+        {
+          "op": "reserve_entrance_and_aisle_graph",
+          "args": {
+            "topology": "one_aisle_with_turnaround"
+          }
+        },
+        {
+          "op": "place_stall_rows",
+          "args": {
+            "mode": "single_sided",
+            "method": "small_polygon_packing"
+          }
+        },
+        {
+          "op": "insert_landscape_islands"
+        },
+        {
+          "op": "verify_drive_and_bay_reachability"
+        },
+        {
+          "op": "emit_parking_geometry"
+        }
+      ],
+      "hardChecks": [
+        "entry_touches_actual_aisle",
+        "every_aisle_connected",
+        "every_stall_front_reachable",
+        "vehicle_turn_radius_valid",
+        "no_building_or_exclusion_overlap",
+        "no_fake_clip_only_connectivity"
+      ],
+      "fallbackPatternId": null,
+      "noteZh": "数据描述不意味着 Placemaker 原版自动支持此拓扑；真实产出由 A/B 测试确认。"
+    }
+  ]
+}

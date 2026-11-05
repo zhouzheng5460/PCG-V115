@@ -123,31 +123,45 @@ const others0 = othersFingerprint(base);
 
 // ---------------------------------------------------------------- ③ 改切分块数
 {
-  // 探针地块切成 16 块：目标面积 = 自身面积 / 16。
+  // 「切得更碎 → 多出小地块 → 多出楼」这条只对**住宅**成立。
+  // cbd / commercial 的小地块走"塔楼 + 裙房"，切碎之后塔楼放不下，栋数反而变少
+  // （实测同一块 cbd：16 块 13 栋、24 块 10 栋）。所以切分这条不能拿
+  // "总高最大的地块"当探针（它常常是 cbd），要单独挑一块面积最大的住宅。
   //
-  // 为什么是 16 而不是更小的数：切分现在按**沿街面宽**排布（`frontagePartition`），
-  // 自动路径的块数 ≈ 街区面宽 / 26 m，一间住宅街区本来就有 8~11 个地块。
-  // 手动档要验的是"比自动更碎"，所以目标块数得明显多于自动值 —— 8 块反而
-  // 和自动结果撞上（切完 8 栋 < 自动 11 栋），看不出接线通没通。
-  // 16 块 ≈ 每块 17 单位²（约 830 m²），是个住宅院落的真实尺度。
-  const p = base.patches.find((q) => patchKey(q) === probeKey)!;
-  let aSum = 0;
-  const ring = Array.from(p.shape);
-  for (let i = 0; i < ring.length; i++) {
-    const q = ring[(i + 1) % ring.length];
-    aSum += ring[i].x * q.y - q.x * ring[i].y;
+  // 另外：自动切分按**沿街面宽**（住宅 `parcelPitchM` 26 m）+ 进深 40 m 上限排布，
+  // 一块 300~470 单位²（1.5~2.3 万 m²）的住宅街区自动就切出 15~20 个地块。
+  // 所以"切成 16 块"反而比自动更粗，栋数不会增加 —— 目标块数要比自动细一档。
+  let splitKey = '';
+  let splitA = 0;
+  for (const q of base.patches) {
+    if (q.blocked) continue;
+    const w = q.ward as unknown as WardLike | null;
+    if (!w || w.use !== 'residential') continue;
+    if (!builtOf(base, patchKey(q))?.count) continue;
+    let s = 0;
+    const ring = Array.from(q.shape);
+    for (let i = 0; i < ring.length; i++) {
+      const n2 = ring[(i + 1) % ring.length];
+      s += ring[i].x * n2.y - n2.x * ring[i].y;
+    }
+    const a = Math.abs(s) / 2;
+    if (a > splitA) {
+      splitA = a;
+      splitKey = patchKey(q);
+    }
   }
-  const areaU = Math.abs(aSum) / 2;
-  const target = areaU / 16;
+  ok(splitKey !== '', `找到住宅切分探针 ${splitKey}（${splitA.toFixed(0)} 单位²）`);
 
-  const m = run(new Map([[probeKey, { parcelTargetA: target }]]));
-  const b = builtOf(m, probeKey)!;
-  ok(b.count > b0.count, `切成 16 块后栋数变多（${b0.count} → ${b.count}）`);
-  ok(othersFingerprint(m) === others0, '别的地块切分不受影响');
+  const s0 = builtOf(base, splitKey)!;
+  // 32 块 ≈ 每块 13~15 单位²（约 650~730 m²），比自动细一档
+  const m = run(new Map([[splitKey, { parcelTargetA: splitA / 32 }]]));
+  const b = builtOf(m, splitKey)!;
+  ok(b.count > s0.count, `切成 32 块后栋数变多（${s0.count} → ${b.count}）`);
+  ok(builtOf(m, probeKey)!.hSum === b0.hSum, '别的探针地块一栋都没动');
 
   // 目标面积给得越大 → 块数越少，直到 1 块
-  const big = run(new Map([[probeKey, { parcelTargetA: areaU * 4 }]]));
-  const bb = builtOf(big, probeKey)!;
+  const big = run(new Map([[splitKey, { parcelTargetA: splitA * 4 }]]));
+  const bb = builtOf(big, splitKey)!;
   ok(bb.count <= b.count, `目标面积越大块数越少（${b.count} → ${bb.count}）`);
   ok(bb.count >= 1, `再大也至少留 1 栋（${bb.count}）`);
 }

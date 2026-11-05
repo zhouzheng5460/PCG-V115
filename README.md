@@ -1,5 +1,8 @@
 # TownForge
 
+> **接手开发请先读 [`AI_HANDOFF.md`](./AI_HANDOFF.md)** —— 开关矩阵、当前进度、待办与雷区。
+> 分阶段完整叙事见 [`DEVELOPMENT.md`](./DEVELOPMENT.md)。
+
 把 [TownGeneratorOS](https://github.com/watabou/TownGeneratorOS)（Medieval Fantasy City Generator 的开源源码）改造成一个可交互编辑、并能导出 glTF/GLB 的城市生成器。
 
 原项目是 Haxe + OpenFL 的桌面/Flash 风格 2D 生成器，算法写死在一次性 build 里、路宽是三个硬编码常量、没有任何导出能力。这个工程把生成内核逐文件移植到 TypeScript，在此之上加了三件事。

@@ -76,6 +76,16 @@ export interface RoadRealizeOptions {
   clip?: PlanSurface;
 }
 
+/** 一块环的包围盒 */
+function segClipBox(ring: Pt[]) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of ring) {
+    x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y);
+    x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y);
+  }
+  return { x0, y0, x1, y1 };
+}
+
 /** 把一块面裁到 clip 里（取最大块） */
 function clipSurface(s: Pt[], clip?: PlanSurface): Pt[] | null {
   if (!clip) return s;
@@ -106,6 +116,45 @@ export function realizeRoads(
   const corridors: PlanSurface[] = [];
   const vehicleClass = opts.vehicleClass ?? 'internal_residential';
 
+  // solver 模式：已经铺出去的路面。后面的路要**从里面扣掉**再铺。
+  //
+  // 逐段矩形在折角与并流处一定会互压（规划侧已经按格子去重、按上游半宽退让，
+  // 仍然会在"两条路并行一小段"时叠 6 m²）。这里做最后一道：路面不重复铺 ——
+  // 后来者贴着先来者的边缘接上去。差集后可能碎成多块，各自成面。
+  const drawn: PlanSurface[] = [];
+
+  /**
+   * solver 模式：路面**必须从建筑轮廓里让开**。
+   *
+   * 求解器按"中心线到建筑 ≥ 净空"建图，但净空是分交通类型的：步行只有 0.5 m。
+   * 中线合规 + 路面 3~5 m 宽 = 铺装必然啃进建筑（实测全城 550 m²）。
+   * 光靠中线守法不够，落地面自己得再裁一次 —— 与"地面扣除走廊"同源的做法。
+   */
+  const bldCuts =
+    ctx.circulationMode === 'solver'
+      ? c.buildings.map((b) => {
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (const q of b.footprint.outer) {
+            x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y);
+            x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y);
+          }
+          return { ring: b.footprint.outer, box: { x0, y0, x1, y1 } };
+        })
+      : [];
+  const cutBuildings = (pieces: PlanSurface[], box: { x0: number; y0: number; x1: number; y1: number }) => {
+    if (bldCuts.length === 0) return pieces;
+    const hits = bldCuts.filter(
+      (b) => box.x0 < b.box.x1 && b.box.x0 < box.x1 && box.y0 < b.box.y1 && b.box.y0 < box.y1
+    );
+    if (hits.length === 0) return pieces;
+    let out = pieces;
+    for (const b of hits) {
+      out = surfaceSubtract(out, [surface(b.ring)]).filter((q) => surfaceArea(q) > 0.02);
+      if (out.length === 0) return out;
+    }
+    return out;
+  };
+
   c.circulation.forEach((path, i) => {
     if (path.pts.length < 2) return;
     const profile = path.role === 'truck' ? ROAD_PROFILES.truck : ROAD_PROFILES[vehicleClass];
@@ -118,16 +167,64 @@ export function realizeRoads(
     let junctions = 0;
 
     // ① 车行道：逐段矩形
+    //
+    // solver 模式：**段两端各退半个路宽**。Realizer 是按段铺矩形，两段在折角处
+    // 一定互压（5 m 路每转一个弯就是 6.25 m² 的重复铺装）。退让之后两块矩形变成
+    // "相接"而不是"相交"，转角交给顶点方垫（role=overlay，本来就为该缝而存在）。
+    const solver = ctx.circulationMode === 'solver';
+    const shorten = (p: Pt, toward: Pt, by: number): Pt => {
+      const dx = toward.x - p.x;
+      const dy = toward.y - p.y;
+      const L = Math.hypot(dx, dy);
+      if (L <= 1e-9) return p;
+      const t = Math.min(by / L, 0.49);
+      return new Pt(p.x + dx * t, p.y + dy * t);
+    };
+    /** 每一段是否真的铺了（方垫要靠它决定自己该不该存在） */
+    const segOk: boolean[] = [];
     for (let k = 0; k + 1 < path.pts.length; k++) {
-      const a = path.pts[k];
-      const b = path.pts[k + 1];
-      len += Pt.distance(a, b);
+      const a0 = path.pts[k];
+      const b0 = path.pts[k + 1];
+      len += Pt.distance(a0, b0);
+      let a = a0;
+      let b = b0;
+      const w = path.width > 0 ? path.width : U(profile.surfaceM);
+      if (solver) {
+        if (k > 0) a = shorten(a0, b0, w / 2);
+        if (k + 2 < path.pts.length) b = shorten(b0, a0, w / 2);
+        // **短于自身断面的一段不是路**。solver 常常只补"街边 → 已铺场地"这一小截，
+        // 退让之后可能只剩 1~4 m —— 铺出来就是一个方块，比缺口更难看。
+        // 这种段交给方垫和既有铺装去衔接，不单独成面。
+        if (Pt.distance(a, b) <= w * 0.75) { segOk[k] = false; continue; }
+      }
       const seg = segRect(a, b, path.width > 0 ? path.width : U(profile.surfaceM));
       if (!seg) continue;
+      segOk[k] = false;
       const segClipped = clipSurface(seg, opts.clip);
       if (segClipped) {
-        part.surfaces.push({ name: `${name}_surf_${k}`, group: ctx.group, ring: segClipped, mat: profile.mat, y: base + 0.0016 });
-        corridors.push(surface(segClipped));
+        segOk[k] = true;
+        let pieces: PlanSurface[] = [surface(segClipped)];
+        if (solver) {
+          const bx = segClipBox(segClipped);
+          pieces = cutBuildings(pieces, bx);
+          if (pieces.length > 0 && drawn.length > 0) {
+            pieces = surfaceSubtract(pieces, drawn).filter((p) => surfaceArea(p) > 0.02);
+          }
+        }
+        const multi = pieces.length > 1;
+        pieces.forEach((p, pi) => {
+          const nm = multi ? `${name}_surf_${k}_${pi}` : `${name}_surf_${k}`;
+          part.surfaces.push({
+            name: nm,
+            group: ctx.group,
+            ring: p.outer,
+            mat: profile.mat,
+            y: base + 0.0016,
+            ...(p.holes.length > 0 ? { holes: p.holes } : {}),
+          });
+          corridors.push(p);
+        });
+        if (solver) drawn.push(...pieces);
       }
       // 路缘：两侧（垂直于段方向，偏移 halfW + curb/2）
       for (const side of [1, -1] as const) {
@@ -138,21 +235,42 @@ export function realizeRoads(
         if (c2) part.surfaces.push({ name: `${name}_curb_${k}_${side}`, group: ctx.group, ring: c2, mat: profile.curbMat, y: base + 0.0018, role: 'overlay' });
       }
       // 人行道（可选）
-      if ((opts.sidewalk ?? profile.sidewalkM > 0) && profile.sidewalkM > 0) {
+      //
+      // solver 模式不铺：求解器给的是"通行净空"（支路 3 m / 主干 5 m），再往两侧
+      // 各加 1.5 m 人行道等于把 3 m 支路撑成 6 m 走廊，直接压到建筑与庭院上；
+      // 而且折角处人行道条带互相叠，实测 50 m² 的重复铺装全是它。
+      if (!solver && (opts.sidewalk ?? profile.sidewalkM > 0) && profile.sidewalkM > 0) {
         for (const side of [1, -1] as const) {
           const walk = sideStrip(a, b, halfW + U(profile.curbM), U(profile.sidewalkM), side);
           const w2 = walk ? clipSurface(walk, opts.clip) : null;
-          if (w2) part.surfaces.push({ name: `${name}_walk_${k}_${side}`, group: ctx.group, ring: w2, mat: profile.walkMat, y: base + 0.0014 });
+          if (w2) {
+            part.surfaces.push({ name: `${name}_walk_${k}_${side}`, group: ctx.group, ring: w2, mat: profile.walkMat, y: base + 0.0014 });
+            // 人行道也是**路面**，不是铺在草地上的装饰：solver 模式下它必须参与
+            // 地面扣除。否则一条 1.5 m 的人行道会横穿庭院/绿地而地面不知道，
+            // 精确重叠加起来实测 448 m²。
+            if (ctx.circulationMode === 'solver') corridors.push(surface(w2));
+          }
         }
       }
     }
 
     // ② 顶点方垫：90° 转角不留裂缝（loop 的四个角全靠它）
     for (let k = 0; k < path.pts.length; k++) {
+      if (solver) {
+        // 端点不需要垫：段的末端本来就没退让，垫只会从路口里探出一个方块
+        if (k === 0 || k === path.pts.length - 1) continue;
+        // 两边都没铺出段，这个垫就是孤零零一块 5×5 —— 正是"橙色方块"的来源
+        if (!segOk[k - 1] && !segOk[k]) continue;
+      }
       const p = path.pts[k];
       const pad = square(p, path.width > 0 ? path.width : U(profile.surfaceM));
-      const p2 = pad ? clipSurface(pad, opts.clip) : null;
+      let p2 = pad ? clipSurface(pad, opts.clip) : null;
       if (!p2) continue;
+      if (solver && bldCuts.length > 0) {
+        const cut = cutBuildings([surface(p2)], segClipBox(p2));
+        if (cut.length === 0) continue;
+        p2 = cut.reduce((a, b) => (surfaceArea(a) >= surfaceArea(b) ? a : b)).outer;
+      }
       // 顶点方垫是**表达层**：它就是为了盖住两段直角相交处的缝，
       // 天然与相邻段矩形重叠。用 role 声明，而不是让审计去猜名字。
       part.surfaces.push({ name: `${name}_pad_${k}`, group: ctx.group, ring: p2, mat: profile.mat, y: base + 0.0016, role: 'overlay' });

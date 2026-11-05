@@ -189,7 +189,11 @@ export function realizeAccess(c: SitePlanCandidate, ctx: RealizationContext, par
 /** R5（轻量版） · circulation → 场景路径（还没有接 road/system，先成面） */
 export function realizeCirculation(c: SitePlanCandidate, ctx: RealizationContext, part: RealizerPart): void {
   const base = ctx.groundY ?? 0.012;
-  c.circulation.forEach((p, i) => {
+  // R1.3：求解器出的中心线**已经由 realizeRoads 铺成路面**，这里不再画一条
+  // PathFeature —— 否则同一段路会被表达两次（一块面 + 一条线），审计会把
+  // 那条线与路面判成重复表达。
+  const list = c.circulation.filter((p) => p.source !== 'solver');
+  list.forEach((p, i) => {
     part.paths.push({
       name: `${c.id}_circ_${p.role}_${i}`,
       group: ctx.group,

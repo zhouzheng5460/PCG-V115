@@ -21,6 +21,21 @@ import type { PropFeature, PathFeature, SolidFeature, SurfaceFeature } from './t
 
 export type LayerId = string;
 
+/**
+ * 是不是**地块内部**铺出来的路面（Planner/R1 的 `realizeRoads` 产物）。
+ *
+ * 命名形如 `<candidateId>_road_<路径号>_surf_<段号>`，另有 `_walk_` / `_curb_` / `_pad_`。
+ *
+ * 为什么这里敢按名字判：这几类面是 `realize/road.ts` **自己**命名的，而它们
+ * 带上来的 `group` 是 `lot/<typology>`、`mat` 是 asphalt/concrete —— 与
+ * "停车场地坪""硬质铺装"完全同组同材质，靠 group/mat 根本分不开。审计那边
+ * 不用名字判（那是为了抗改名），但图层归属必须有办法把它们摘出来，否则
+ * 用户把「道路」全隐了，地块内部的沥青还在，看起来就是"有一半路关不掉"。
+ */
+function isLotRoadName(name: string): boolean {
+  return /_road_\d+_(surf|pad|walk|curb)/.test(name);
+}
+
 /** 一类要素 → 它的图层 id */
 export function layerOfSurface(s: SurfaceFeature): LayerId {
   const g = s.group;
@@ -31,6 +46,10 @@ export function layerOfSurface(s: SurfaceFeature): LayerId {
   if (g === 'road/junction') return 'road:junction';
   if (g === 'road/marking') return 'road:mark';
   if (g === 'parking/marking') return 'road:parkmark';
+  // 地块内部路：必须在下面按材质分类**之前**拦掉
+  if (g.startsWith('lot/') && isLotRoadName(s.name)) {
+    return /_road_\d+_(walk|curb)/.test(s.name) ? 'lotRoad:walk' : 'lotRoad:surf';
+  }
   // 地块内容：按材质分。铺装 / 草地 / 水面是"这一片地是什么"，
   // 用户调图时最常单独关掉的就是草地和铺装。
   switch (s.mat) {
@@ -62,7 +81,30 @@ export function layerOfPath(p: PathFeature): LayerId {
   // 围栏是竖起来的（有 height），地块内的路 / 园路是贴地的。
   // 阈值必须只判"有没有高度"：栏杆横杆截面只有 5 cm，写成 > 0.05 会把
   // 所有横杆判成贴地小路（然后它们的图层开关就失效了）。
-  return p.height && p.height > 0 ? 'path:fence' : 'path:lane';
+  if (p.height && p.height > 0) return 'path:fence';
+  /**
+   * 车位划线也是"贴地的线"，但它**不是道路**。
+   *
+   * `realize/parking.ts` 把每个车位画成一条 `markWhite` 的短线（`*_stall_i_k`），
+   * 只按"有没有高度"判定的话，这些线会全部落进「内部道路中线」——
+   * 实测 1339 条里 1333 条是车位线，真正的内部路中线只有 3 条。
+   * 结果就是"高亮内部道路"把整片停车场刷成橙色，而真正的路几乎看不见。
+   *
+   * 判材质不判名字：标线材质只有 markWhite / markYellow 两种，
+   * 道路中线用的是 asphalt / asphaltLot，天然分得开。
+   */
+  if (p.mat === 'markWhite' || p.mat === 'markYellow') return 'road:parkmark';
+  return 'path:lane';
+}
+
+/** 地面标高的"内部道路"三件套：车行面 / 人行-路缘 / 中线 */
+export function isInternalRoadLayer(id: LayerId): boolean {
+  return id === 'lotRoad:surf' || id === 'lotRoad:walk' || id === 'path:lane';
+}
+
+/** 高亮时该用哪个材质色（车行面与步行面分开，否则走向和路缘糊成一片） */
+export function hiliteMatOf(id: LayerId): 'lotRoadHi' | 'lotRoadHiWalk' {
+  return id === 'lotRoad:walk' ? 'lotRoadHiWalk' : 'lotRoadHi';
 }
 
 // ---------------------------------------------------------------- 图层清单
@@ -114,6 +156,19 @@ export const LAYER_GROUPS: LayerGroupDef[] = [
     ],
   },
   {
+    id: 'lotroad',
+    label: '内部道路',
+    open: true,
+    items: [
+      // 这三项原来散落着：「地块内道路」藏在"线性要素"里，Planner/R1 铺的路面
+      // 被按材质并进了"铺装与地面"，于是"关掉道路"之后街区里还有沥青。
+      // 现在收成一组，就是为了回答"哪一段是内部道路"。
+      { id: 'lotRoad:surf', label: '内部车行路面', color: '#2f3540' },
+      { id: 'lotRoad:walk', label: '内部人行道 / 路缘', color: '#9a958c' },
+      { id: 'path:lane', label: '内部道路中线', color: '#c8a24a' },
+    ],
+  },
+  {
     id: 'pave',
     label: '铺装与地面',
     items: [
@@ -148,9 +203,8 @@ export const LAYER_GROUPS: LayerGroupDef[] = [
   },
   {
     id: 'path',
-    label: '线性要素',
+    label: '围栏与其他线',
     items: [
-      { id: 'path:lane', label: '地块内道路', color: '#a49d8e' },
       { id: 'path:fence', label: '围栏 / 栏杆', color: '#79808c' },
       { id: 'prop:post', label: '栏杆立柱', color: '#6f747f' },
     ],
@@ -170,6 +224,20 @@ export const OVERLAY_GROUPS: LayerGroupDef[] = [
       { id: 'ov:centerline', label: '道路中线', color: '#2c6fbf', on: false },
       { id: 'ov:junctions', label: '路口点', color: '#e0a02c', on: false },
       { id: 'ov:vertices', label: '拓扑点（可拖）', color: '#8a5fb0', on: false },
+    ],
+  },
+  {
+    id: 'ov-cir',
+    label: 'R1 交通诊断',
+    open: false,
+    items: [
+      // 五档分开，是因为"只看新增"会得出"内部路是几个断头"的错误结论 ——
+      // 网络主体常常是既有铺装，新铺的只是补丁。
+      { id: 'ov:cir-existing', label: '既有可通行道路', color: '#4682b4', on: false },
+      { id: 'ov:cir-new', label: 'A* 新增连接', color: '#e0762e', on: false },
+      { id: 'ov:cir-merged', label: '合并后的完整网络', color: '#c85a1e', on: false },
+      { id: 'ov:cir-portals', label: '入口与街区出口', color: '#2f8f9d', on: false },
+      { id: 'ov:cir-unreachable', label: '接不上的需求点', color: '#d8341f', on: false },
     ],
   },
   {

@@ -669,6 +669,13 @@ details.sec > .sec-body {
   border-color: var(--accent);
   color: var(--accent);
 }
+/* 「内部道路 → 高亮」处于打开状态：用强调色实心，别和全显/全隐混为一谈 */
+.lyr-head .mini button.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #1b1916;
+  font-weight: 600;
+}
 
 .lyr-item {
   display: flex;
