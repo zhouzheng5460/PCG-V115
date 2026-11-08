@@ -172,6 +172,14 @@ interface PutOpts {
   minScale?: number;
   /** 是否允许被边界裁形（默认不允许，靠缩放而不是裁切） */
   allowClip?: boolean;
+  /**
+   * 与相邻建筑**共墙**（间距 0）。
+   *
+   * 连续商业界面就是一间挨一间，中间不该有 2 m 缝。
+   * 默认的避让表会把每栋楼外扩 2 m，于是每间店面都被硬生生推开 4 m，
+   * 整条街变成"一排独立小盒子"（实测 C01 就是这个观感）。
+   */
+  abut?: boolean;
 }
 
 /**
@@ -188,7 +196,7 @@ function put(cx: ParcelCtx, o: PutOpts): SiteBuilding | null {
     d: U(o.d),
     prefer: (p, clear) => -Pt.distance(p, o.at) + clear * 0.3,
     minScale: o.minScale ?? 0.72,
-    avoid: avoidRects(cx),
+    avoid: o.abut ? avoidExact(cx) : avoidRects(cx),
   });
   if (!r) return null;
   const floors = Math.max(1, Math.round(o.floors));
@@ -236,6 +244,11 @@ function floorHOf(g: SiteBuilding['grammar']): number {
  */
 function avoidRects(cx: ParcelCtx): PlanSurface[] {
   return cx.global.map((g) => rectSurface(g.center, g.ang, U(g.w + 4), U(g.d + 4)));
+}
+
+/** 只避让实际占地（不扩边）：用于"共墙"的连续界面 */
+function avoidExact(cx: ParcelCtx): PlanSurface[] {
+  return cx.global.map((g) => rectSurface(g.center, g.ang, U(g.w), U(g.d)));
 }
 
 /** 沿方向的偏移点 */
@@ -325,10 +338,12 @@ function parallelSlabs(cx: ParcelCtx): boolean {
   if (!ob) return false;
   const u = Math.abs(((Math.atan2(ob.uy, ob.ux) - cx.streetAng + Math.PI / 2) % Math.PI) - Math.PI / 2) < Math.PI / 6 ? cx.streetAng : Math.atan2(ob.uy, ob.ux);
   const v = u + Math.PI / 2;
-  const dBar = 14;
-  const gap = 24;
-  const width = Math.min(toM(Math.max(ob.w, ob.d)) - 12, 68);
-  const rows = Math.max(1, Math.min(2, Math.floor((toM(Math.min(ob.w, ob.d)) - 8 + gap) / (dBar + gap))));
+  const dBar = 13;
+  // 排距 20 m：游戏场景按视觉判断（远景要能看清是一排排板楼），
+  // 真实的 1.2 倍日照间距会把 40 m 进深的地块压成一排。
+  const gap = 20;
+  const width = Math.min(toM(Math.max(ob.w, ob.d)) - 10, 62);
+  const rows = Math.max(1, Math.min(3, Math.floor((toM(Math.min(ob.w, ob.d)) - 6 + gap) / (dBar + gap))));
   const floors = 8 + Math.floor(cx.rng() * 3);
   const C = cx.core;
   let n = 0;
@@ -420,8 +435,9 @@ function shopLine(cx: ParcelCtx): number {
   const inward = cx.inward;
   const depth = 20;
   const setback = 3; // 门前铺装（在 5 m 建筑退线之外再让 3 m）
-  const units: number = Math.max(1, Math.floor(lenM / 13));
-  const unitW = Math.min(14, Math.max(7, (lenM - 2) / units));
+  // 8~13 m 一开间（小店铺的面宽），整条街按可用长度铺满
+  const units: number = Math.max(1, Math.floor(lenM / 11));
+  const unitW = Math.min(13, Math.max(7, (lenM - 1) / units));
   let n = 0;
   for (let i = 0; i < units; i++) {
     const t = (i + 0.5) / units;
@@ -435,8 +451,9 @@ function shopLine(cx: ParcelCtx): number {
       floors: 2 + (cx.rng() > 0.7 ? 1 : 0),
       name: `沿街商铺 ${i + 1}`,
       grammar: 'street-shop-line',
-      reason: `沿街第 ${i + 1} 开间（${unitW.toFixed(0)} m 面宽 × ${depth} m 进深），门前 ${setback} m 铺装`,
+      reason: `沿街第 ${i + 1} 开间（${unitW.toFixed(0)} m 面宽 × ${depth} m 进深），与相邻店铺共墙，门前 ${setback} m 铺装`,
       minScale: 0.8,
+      abut: true,
     });
     if (b) n++;
   }
@@ -488,12 +505,20 @@ function industrialOf(cx: ParcelCtx): void {
   if (!ob) return;
   const wM = toM(Math.max(ob.w, ob.d));
   const dM = toM(Math.min(ob.w, ob.d));
+  /**
+   * 厂房尺寸模板：从"标准大跨"一路退到"窄场地小仓库"。
+   *
+   * 退到最后一档仍然放不下才允许拒绝 —— 任务书要求游戏化优先，
+   * 一派 48 m 进深的厂区必须能出房子，不能因为凑不到 66 m 就整片空着。
+   */
   const variants = [
     { hallD: 36, apron: 22, office: true, officeD: 15, side: false },
     { hallD: 30, apron: 20, office: true, officeD: 14, side: false },
     { hallD: 30, apron: 16, office: true, officeD: 14, side: true },
-    { hallD: 24, apron: 14, office: true, officeD: 12, side: true },
-    { hallD: 24, apron: 14, office: false, officeD: 0, side: true },
+    { hallD: 26, apron: 14, office: true, officeD: 12, side: true },
+    { hallD: 24, apron: 12, office: true, officeD: 12, side: true },
+    { hallD: 22, apron: 11, office: false, officeD: 0, side: true },
+    { hallD: 18, apron: 9, office: false, officeD: 0, side: true },
   ];
   const u = Math.abs(((Math.atan2(ob.uy, ob.ux) - cx.streetAng + Math.PI / 2) % Math.PI) - Math.PI / 2) < Math.PI / 6 ? cx.streetAng : Math.atan2(ob.uy, ob.ux);
   /**
@@ -504,13 +529,14 @@ function industrialOf(cx: ParcelCtx): void {
    * 早先把 side 也算成串联，结果 I01 被判成"只能放厂房、不能放办公"，
    * 一个 142×56 的工业地块没有办公楼，这在功能上是不成立的。
    */
+  // 退线 6 m / 后场 4 m：游戏场景按视觉判断，不按真实退线规范卡（任务书第二节第 3 条）
   const need = (x: (typeof variants)[number]) =>
-    (x.side ? 10 + x.apron + x.hallD + 6 : 10 + x.officeD + x.apron + x.hallD + 6);
+    (x.side ? 6 + x.apron + x.hallD + 4 : 6 + x.officeD + x.apron + x.hallD + 4);
   const fit = variants.find((x) => dM >= need(x));
   if (!fit) {
     const minNeed = need(variants[variants.length - 1]);
     cx.failures.push(
-      `${cx.p.id}：场地进深 ${dM.toFixed(1)} m < 工业最小布局所需 ${minNeed.toFixed(1)} m（退线 10 + 装卸 14 + 厂房 24 + 后场 6），` +
+      `${cx.p.id}：场地进深 ${dM.toFixed(1)} m < 工业最小布局所需 ${minNeed.toFixed(1)} m（退线 6 + 装卸 9 + 厂房 18 + 后场 4），` +
         `按任务书不压缩货运净宽，改为拒绝布置厂房`
     );
     cx.notes.push({
@@ -522,7 +548,7 @@ function industrialOf(cx: ParcelCtx): void {
   }
   const floorsOffice = 4;
   let n = 0;
-  const hallW = Math.min(60, Math.max(24, wM - 14));
+  const hallW = Math.min(60, Math.max(18, wM - 14));
   // 厂房位置：办公之后（串联）或者前端之后（并排）
   const backInsetM = fit.side ? fit.apron + fit.hallD / 2 + 4 : fit.officeD + fit.apron + fit.hallD / 2 + 4;
   const hallAt = new Pt(

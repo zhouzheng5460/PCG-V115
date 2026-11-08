@@ -4,6 +4,7 @@
 import { Pt } from '../core/geom';
 import type { Model } from '../town/model';
 import { buildScene, type SceneOptions } from '../scene/build';
+import type { Scene } from '../scene/types';
 import {
   hiliteMatOf,
   isInternalRoadLayer,
@@ -37,6 +38,28 @@ export interface Build3DOptions extends SceneOptions {
 /** 场景 → 三角形。这是 2D 预览与 GLB 导出的唯一出口 */
 export function buildTownMeshes(model: Model, opts: Build3DOptions = {}): Primitive[] {
   const scene = buildScene(model, opts);
+  return sceneToPrimitives(scene, {
+    layers: opts.layers,
+    hiliteLotRoad: opts.hiliteLotRoad,
+    cityRadius: model.cityRadius || 100,
+  });
+}
+
+export interface SceneToPrimsOpts {
+  layers?: (id: LayerId) => boolean;
+  hiliteLotRoad?: boolean;
+  /** 城市半径：只用来拦"离谱坐标"的尖刺三角形 */
+  cityRadius?: number;
+}
+
+/**
+ * 已经是 Scene 时的出口（F3 城市合成器走这条）。
+ *
+ * 抽出来是为了让"新链路"和"旧链路"在**导出**这一步完全同源：
+ * 两者都只产 Scene，之后走同一段三角形化代码，不可能出现
+ * "预览是一种形状、导出的 GLB 是另一种"。
+ */
+export function sceneToPrimitives(scene: Scene, opts: SceneToPrimsOpts = {}): Primitive[] {
   const out: Primitive[] = [];
   /** 高亮时换色；判定与 2D 完全相同（同一份 layerOfSurface） */
   const colorOf = (layer: LayerId, mat: keyof typeof MAT) =>
@@ -61,7 +84,7 @@ export function buildTownMeshes(model: Model, opts: Build3DOptions = {}): Primit
    * 三角化出来的就是一根本扎穿整个场景的"尖刺"三角形。
    * 这些环来自布尔运算的退化分支，源头难堵全，所以在导出前统一拦掉。
    */
-  const cityR = (model.cityRadius || 100) * 3;
+  const cityR = (opts.cityRadius ?? 100) * 3;
   const saneRing = (ring: { x: number; y: number }[]): boolean => {
     for (const p of ring) {
       if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return false;
@@ -74,6 +97,7 @@ export function buildTownMeshes(model: Model, opts: Build3DOptions = {}): Primit
   for (const s of scene.surfaces) {
     if (!vis(layerOfSurface(s))) continue;
     if (!saneRing(s.ring)) continue;
+    // 三角化前的环塌缩（去近重合点 / 共线点）在 flatPolygon 内部统一做
     addFlat(flatPolygon(s.ring, s.y, s.name, s.group, colorOf(layerOfSurface(s), s.mat), s.holes ?? []));
   }
 

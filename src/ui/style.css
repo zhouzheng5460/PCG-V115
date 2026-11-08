@@ -959,14 +959,51 @@ details.adv-sub > summary {
 .mode-btn:hover:not(.active) {
   color: var(--text);
 }
-/* planner / shadow 是"另一条链"，用一点暖色提示当前不在 legacy 上 */
+/* planner / f3 是"另一条链"，用一点暖色提示当前不在 legacy 上 */
 .mode-btn.active[data-mode='planner'] {
   background: #2b3a2f;
   color: #cfe6c8;
 }
-.mode-btn.active[data-mode='shadow'] {
-  background: #3a2b28;
-  color: #f0c4b4;
+.mode-btn.active[data-mode='f3'] {
+  background: #2a3340;
+  color: #bcd6f2;
+}
+
+/* F3 风貌条：紧凑的 chip 组，只在这一模式下显示 */
+.f3-modes {
+  margin-left: 8px;
+  gap: 1px;
+  align-items: center;
+  padding: 2px 4px;
+}
+.f3-tag {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  padding: 0 4px 0 2px;
+  letter-spacing: 0.04em;
+}
+.f3-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+  margin: 0 4px;
+}
+.f3-chip {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.f3-chip.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.f3-chip:hover:not(.active) {
+  color: var(--text);
 }
 
 /* ---------------------------------------------------------------- R8 · Planner Debug HUD */

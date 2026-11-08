@@ -252,51 +252,10 @@ export interface PmConverted {
  * 所以这里按 `settings.aisleWidth` 生成真实路面多边形：
  * 逐段平移 ±h，相邻段的平移线求交（斜接），首尾加平头端帽。
  */
-export function bufferPolyline(pts: Pt[], h: number): Pt[] | null {
-  if (pts.length < 2) return null;
-  const left: Pt[] = [];
-  const right: Pt[] = [];
-  const segN: { nx: number; ny: number }[] = [];
-  for (let i = 0; i + 1 < pts.length; i++) {
-    const dx = pts[i + 1].x - pts[i].x;
-    const dy = pts[i + 1].y - pts[i].y;
-    const L = Math.hypot(dx, dy);
-    if (L < 1e-9) continue;
-    segN.push({ nx: -dy / L, ny: dx / L });
-  }
-  if (segN.length === 0) return null;
-  // 首点：第一段的法线
-  left.push(new Pt(pts[0].x + segN[0].nx * h, pts[0].y + segN[0].ny * h));
-  right.push(new Pt(pts[0].x - segN[0].nx * h, pts[0].y - segN[0].ny * h));
-  // 中间点：斜接（两条平移线求交），近共线时退化为平均法线
-  for (let i = 1; i + 1 < pts.length; i++) {
-    const a = segN[i - 1];
-    const b = segN[i];
-    const cross = a.nx * b.ny - a.ny * b.nx;
-    if (Math.abs(cross) < 1e-6) {
-      const nx = (a.nx + b.nx) / 2;
-      const ny = (a.ny + b.ny) / 2;
-      const k = h / (Math.hypot(nx, ny) || 1);
-      left.push(new Pt(pts[i].x + nx * k, pts[i].y + ny * k));
-      right.push(new Pt(pts[i].x - nx * k, pts[i].y - ny * k));
-    } else {
-      // 角平分线方向上取 h / cos(θ/2)
-      const nx = a.nx + b.nx;
-      const ny = a.ny + b.ny;
-      const nl = Math.hypot(nx, ny) || 1;
-      const ux = nx / nl;
-      const uy = ny / nl;
-      const cosHalf = ux * a.nx + uy * a.ny || 1;
-      const k = h / Math.max(0.35, cosHalf);
-      left.push(new Pt(pts[i].x + ux * k, pts[i].y + uy * k));
-      right.push(new Pt(pts[i].x - ux * k, pts[i].y - uy * k));
-    }
-  }
-  const last = segN[segN.length - 1];
-  left.push(new Pt(pts[pts.length - 1].x + last.nx * h, pts[pts.length - 1].y + last.ny * h));
-  right.push(new Pt(pts[pts.length - 1].x - last.nx * h, pts[pts.length - 1].y - last.ny * h));
-  return left.concat(right.reverse());
-}
+// 实现已移到 core/polyline（浏览器安全），这里保留同名导出以免调用方改动。
+// 注意还要 import 一次：本文件内部也用它，单纯 `export ... from` 不会引入局部绑定。
+import { bufferPolyline } from '../../core/polyline';
+export { bufferPolyline };
 
 /** 把折线两端各沿自身方向延长 d（端头回车空间） */
 function extendEnds(pts: Pt[], d: number): Pt[] {

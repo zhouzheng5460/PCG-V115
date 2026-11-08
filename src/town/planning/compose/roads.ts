@@ -27,8 +27,8 @@ import {
 import type { SiteRoadEdge } from '../core/types';
 import { U } from '../subdivision/types';
 import { obbOf } from '../subdivision/geom';
-import { clearanceField } from '../adapt/geom';
-import { bufferPolyline } from '../../parking/placemaker';
+import { clearanceField, toM } from '../adapt/geom';
+import { bufferPolyline } from '../../../core/polyline';
 import type { ComposeInput, InternalRoad, RoadClass, SiteGate } from './types';
 
 /**
@@ -44,7 +44,8 @@ const SECTION: Record<RoadClass, { carriage: number; sidewalk: number }> = {
   primary: { carriage: 7.0, sidewalk: 1.6 },
   secondary: { carriage: 5.5, sidewalk: 1.2 },
   service: { carriage: 6.5, sidewalk: 0.9 },
-  pedestrian: { carriage: 4.0, sidewalk: 0 },
+  // 步行主轴 6 m：4 m 只是宅间路，撑不起"园区主脉络"的视觉分量
+  pedestrian: { carriage: 6.0, sidewalk: 0 },
 };
 
 /** 临街带深度（米）：一块地"靠街就能用好"的最大进深。超过它，后侧必须另找接入 */
@@ -248,6 +249,38 @@ export function deepRegion(input: ComposeInput): PlanSurface[] {
  * 判据用"深内区"而不是"整个可建区"：既然临街带里的地块靠街就能成立，
  * 就不该为了"每块地都临路"去铺一条无人需要的路（那会白白吃掉 8~12% 的用地）。
  */
+
+/**
+ * 让主轴**顺着场地的形状弯**，而不是一条直线弦。
+ *
+ * 月牙形地块（R01 是 327 m 长、弧高 90 m 的月牙）上，一条直线弦必然贴着内弧走，
+ * 两端离建筑很远、中间又切进绿地 —— 画出来不像"主轴"，像一条硬塞进去的路。
+ * 做法：沿弦等距取 5 个站点，每站吸附到附近 clearance 最大的点（场地自己的脊线），
+ * 再连成折线。这条路就是"场地本来想让路走的地方"。
+ */
+function bendToCore(seg: { a: Pt; b: Pt }, field: { pts: { at: Pt; clear: number }[] }, n = 5): Pt[] {
+  const out: Pt[] = [];
+  const radius = 26 / 7; // 吸附半径 26 m
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const base = new Pt(seg.a.x + (seg.b.x - seg.a.x) * t, seg.a.y + (seg.b.y - seg.a.y) * t);
+    let best: Pt = base;
+    let bestClear = -1;
+    for (const q of field.pts) {
+      if (Pt.distance(q.at, base) > radius) continue;
+      // 越靠两端的站点越要贴回原位，否则主轴会缩成一小段
+      const pull = 1 - Math.abs(t - 0.5) * 0.8;
+      const score = q.clear * pull - Pt.distance(q.at, base) * 0.35;
+      if (score > bestClear) {
+        bestClear = score;
+        best = q.at;
+      }
+    }
+    if (out.length === 0 || Pt.distance(out[out.length - 1], best) > 1.5) out.push(new Pt(best.x, best.y));
+  }
+  return out;
+}
+
 export function proposeSkeletons(input: ComposeInput): SkeletonCandidate[] {
   const buildableM2 = surfaceArea(input.buildable) * 49;
   const deep = deepRegion(input);
@@ -256,25 +289,38 @@ export function proposeSkeletons(input: ComposeInput): SkeletonCandidate[] {
     { id: 'S0', label: '无内部路', spines: [], intent: '沿街地块直接靠城市道路组织，内部不新增车行道' },
   ];
 
-  const minDeepM2 = Math.max(700, buildableM2 * 0.09);
+  const minDeepM2 = Math.max(380, buildableM2 * 0.05);
   const ridge = ridgeOf(deep);
-  if (deepM2 < minDeepM2 || !ridge || ridge.clear * 7 < 17) {
+  /**
+   * 车行骨架的准入门槛。
+   *
+   * 早先门槛不过就 `return out`，于是小场地（工业 142×56）连一条货运道都提不出来 ——
+   * 而"工业园区一条主要货运道路"是布局语法里必须有的。现在改成**只影响车行骨架**，
+   * 后面仍然会提"主轴"候选（工业按货运道算，住宅按步行主轴算）。
+   */
+  const deepOk = !(deepM2 < minDeepM2 || !ridge || ridge.clear * 7 < 11);
+  if (!deepOk) {
     out[0].intent =
       `深内区 ${deepM2.toFixed(0)} m²（阈值 ${minDeepM2.toFixed(0)}）` +
       (ridge ? `，最大内切半径 ${(ridge.clear * 7).toFixed(1)} m` : '') +
-      ' → 不足以支撑一条独立车行道，只在确有后排地块时补巷道';
-    return out;
+      ' → 不足以支撑独立车行骨架，改提"主轴"候选（工业按货运道 / 住宅按步行主轴）';
   }
 
-  const ob = obbOf(deep[0].outer) ?? obbOf(input.buildable.outer);
+  const ob = (deep[0] ? obbOf(deep[0].outer) : null) ?? obbOf(input.buildable.outer);
   const axis = ob ? Math.atan2(ob.uy, ob.ux) : 0;
   const bb = bbox([input.buildable]);
   const span = Math.hypot(bb.maxX - bb.minX, bb.maxY - bb.minY);
+  const corePt = ob ? new Pt(ob.cx, ob.cy) : new Pt((bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2);
 
-  // 主脊：过深内区脊点、沿长轴的弦
-  const chord = chordThrough(deep, ridge.at, axis, span)[0];
+  // 主脊：过深内区脊点、沿长轴的弦。深内区不够大时退到"整个可建区"的长轴弦，
+  // 否则 300 m 长条地块会因为深内区只有 60 m 而提不出任何主轴。
+  let chord = deepOk && ridge ? chordThrough(deep, ridge.at, axis, span)[0] : null;
+  if (!chord || chord.len * 7 < 70) {
+    const alt = chordThrough([input.buildable], corePt, axis, span)[0];
+    if (alt && (!chord || alt.len > chord.len)) chord = alt;
+  }
   const gates = makeGates(input).filter((g) => g.kind === 'vehicle');
-  if (chord && chord.len * 7 >= 30) {
+  if (deepOk && chord && chord.len * 7 >= 30) {
     const gate = pickGateFor(gates, chord, input.boundary);
     /**
      * 街口要接到**弦上最近的点**，不是弦的端点。
@@ -301,7 +347,7 @@ export function proposeSkeletons(input: ComposeInput): SkeletonCandidate[] {
   }
 
   // 脊 + 支：深内区超过可建区 28% 且弦长超过 80 m 时才值得
-  if (chord && deepM2 > buildableM2 * 0.28 && chord.len * 7 > 80) {
+  if (deepOk && chord && deepM2 > buildableM2 * 0.28 && chord.len * 7 > 80) {
     const gate = pickGateFor(gates, chord, input.boundary);
     const q2 = gate ? projectOn(chord, gate.at) : chord.a;
     const far2 = Pt.distance(q2, chord.a) > Pt.distance(q2, chord.b) ? chord.a : chord.b;
@@ -326,6 +372,67 @@ export function proposeSkeletons(input: ComposeInput): SkeletonCandidate[] {
           },
         ],
         intent: '深内区过大，单脊会切出超长条地块；加一条横向支路形成"一主一支"的骨架',
+      });
+    }
+  }
+  /**
+   * S1p · 步行主轴。
+   *
+   * 为什么需要它：住宅园区里"一条 6 m 步道 + 两侧入户"是完全成立的布局语法，
+   * 但它不满足车行骨架的深内区门槛（`ridge.clear` 与 `deepM2`），于是候选集里
+   * 只剩 S0 —— 结果 300 m 长的月牙地块被画成一整片草地，没有任何可读的脉络。
+   *
+   * 这条主轴**不是**车行道（`cls: 'pedestrian'`），所以：
+   *   · 不声称服务车辆，也不参与"无接入地块"的判定；
+   *   · 但它真实占地，地块分割必须让开它（与 S1/S2 同一条装配流程）；
+   *   · 沿线的建筑主入口可以正对它开门，这就是园区里那条"主路"。
+   */
+  if (chord && buildableM2 > 4000 && chord.len * 7 >= 60) {
+    const industrial = input.typology === 'industrial' || input.typology === 'data_center';
+    const gate = pickGateFor(gates, chord, input.boundary);
+    const q3 = gate ? projectOn(chord, gate.at) : chord.a;
+    const far3 = Pt.distance(q3, chord.a) > Pt.distance(q3, chord.b) ? chord.a : chord.b;
+    if (!out.some((o) => o.id === 'S1p')) {
+      /**
+       * 工业园区的货运主轴要**贴着一侧走**，不能走中线。
+       *
+       * 142×56 m 的厂区，中线一条 7 m 路把场地切成两条 24 m 的窄带 ——
+       * 厂房（进深 22~24 m）+ 装卸坪（12 m）根本放不下，实测直接产出 0 栋建筑。
+       * 真实厂区是"路靠边、一侧厂房、一侧办公"：把主轴沿法线平移半个进深，
+       * 一侧留 38 m（厂房 + 装卸），另一侧留 16 m（办公 + 员工停车）。
+       */
+      /**
+       * 主轴走"脊线"而不是直线弦（见 `bendToCore`）。
+       * 街口那一小段仍然保留，路才有真实的起点。
+       */
+      const field = clearanceField(input.buildable, 2);
+      const bent = bendToCore({ a: q3, b: far3 }, field, 6);
+      let pts = dedupePts(gate ? [gate.at, ...(bent.length >= 2 ? bent : [q3, far3])] : bent.length >= 2 ? bent : [q3, far3]);
+      if (industrial) {
+        const shortSideM = ob ? Math.min(toM(ob.w), toM(ob.d)) : 0;
+        const shiftM = Math.min(12, Math.max(0, shortSideM / 2 - 16));
+        if (shiftM > 0.5) {
+          const nx2 = -Math.sin(axis);
+          const ny2 = Math.cos(axis);
+          const du = shiftM / 7;
+          pts = pts.map((q) => new Pt(q.x + nx2 * du, q.y + ny2 * du));
+        }
+      }
+      out.push({
+        id: 'S1p',
+        label: industrial ? '货运主轴' : '步行主轴',
+        spines: [
+          {
+            cls: industrial ? 'service' : 'pedestrian',
+            pts,
+            why: industrial
+              ? `7 m 货运主轴（${(chord.len * 7).toFixed(0)} m）：贯穿厂区，办公室与厂房分列两侧，装卸面朝路`
+              : `6 m 步行主轴（${(chord.len * 7).toFixed(0)} m）：贯穿地块长轴，两端接街口，沿线建筑正向入户`,
+          },
+        ],
+        intent: industrial
+          ? '厂区必须有一条能组织货运的道路：不追求货车转弯仿真，但装卸面与它直接相邻'
+          : '不新增车行道，但给园区一条可读的主脉络：步道 + 两侧入户 + 沿线绿地被它切成有尺度的段落',
       });
     }
   }

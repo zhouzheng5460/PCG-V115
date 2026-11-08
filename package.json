@@ -10,7 +10,9 @@
     "test": "tsx test/gen.test.ts"
   },
   "dependencies": {
+    "@types/poly2tri": "^0.9.27",
     "earcut": "^3.2.4",
+    "poly2tri": "^1.5.0",
     "polygon-clipping": "^0.15.7",
     "three": "^0.169.0"
   },

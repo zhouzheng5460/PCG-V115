@@ -46,6 +46,8 @@ export function layerOfSurface(s: SurfaceFeature): LayerId {
   if (g === 'road/junction') return 'road:junction';
   if (g === 'road/marking') return 'road:mark';
   if (g === 'parking/marking') return 'road:parkmark';
+  // F3 张量场一级分区之间的内部步行街：不进市政道路层，归「内部人行道 / 路缘」
+  if (g === 'lot/internal') return 'lotRoad:walk';
   // 地块内部路：必须在下面按材质分类**之前**拦掉
   if (g.startsWith('lot/') && isLotRoadName(s.name)) {
     return /_road_\d+_(walk|curb)/.test(s.name) ? 'lotRoad:walk' : 'lotRoad:surf';

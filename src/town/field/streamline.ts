@@ -53,6 +53,13 @@ export interface TraceOptions {
    * （万一还是进了禁区，剪掉）。两个都要给。
    */
   deflector?: ZoneDeflector;
+  /**
+   * 网格种子的随机抖动幅度（× spacing）。默认 0.7 是 legacy 的原始行为；
+   * 传 0 即完全确定性播种 —— F3 路网要求「噪波不参与路网形态」时用。
+   */
+  seedJitter?: number;
+  /** 是否打乱种子顺序；false = 按网格固定顺序扫描（确定性） */
+  shuffle?: boolean;
   /** 打印每轮播种统计 */
   debug?: boolean;
 }
@@ -289,20 +296,26 @@ export function traceFamily(field: TensorField, family: Family, opts: TraceOptio
   const maxLines = opts.maxLines ?? 160;
   const hash = new PointHash(spacing * 0.5);
 
-  // 抖动网格种子 + 打乱顺序，避免从角落开始一路铺过去
+  // 抖动网格种子 + 打乱顺序，避免从角落开始一路铺过去。
+  // `seedJitter=0 / shuffle=false` 时完全确定性：F3 的张量路网不要任何随机形态扰动。
+  const jitter = opts.seedJitter ?? 0.7;
   const seeds: Pt[] = [];
   for (let y = opts.bounds.minY; y <= opts.bounds.maxY; y += spacing) {
     for (let x = opts.bounds.minX; x <= opts.bounds.maxX; x += spacing) {
       seeds.push(
-        new Pt(x + (Rng.float() - 0.5) * spacing * 0.7, y + (Rng.float() - 0.5) * spacing * 0.7)
+        jitter > 0
+          ? new Pt(x + (Rng.float() - 0.5) * spacing * jitter, y + (Rng.float() - 0.5) * spacing * jitter)
+          : new Pt(x, y)
       );
     }
   }
-  for (let i = seeds.length - 1; i > 0; i--) {
-    const j = Math.floor(Rng.float() * (i + 1));
-    const t = seeds[i];
-    seeds[i] = seeds[j];
-    seeds[j] = t;
+  if (opts.shuffle ?? true) {
+    for (let i = seeds.length - 1; i > 0; i--) {
+      const j = Math.floor(Rng.float() * (i + 1));
+      const t = seeds[i];
+      seeds[i] = seeds[j];
+      seeds[j] = t;
+    }
   }
 
   const queue: Pt[] = seeds;

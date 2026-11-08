@@ -190,15 +190,6 @@ export interface Scene {
   stats: SceneStats;
 
   /**
-   * shadow 模式专用：Planner 的方案叠在 legacy 之上（2D 画红色虚线轮廓）。
-   * 只有 planningMode === 'shadow' 时才有内容。
-   */
-  overlay?: {
-    solids: SolidFeature[];
-    surfaces: SurfaceFeature[];
-  };
-
-  /**
    * Planner 模式的逐地块报告（R8 Debug HUD 用）。
    * legacy 模式下为空 —— 前端据此判断"现在到底跑的是哪条链"。
    */

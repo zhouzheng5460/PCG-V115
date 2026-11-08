@@ -134,8 +134,8 @@ export function buildScene(model: Model, opts: SceneOptions = {}): Scene {
       if (!lot) continue;
 
       // ---- Planner 接管？
-      //    注意：只在 **planner** 模式接管。shadow 模式渲染的仍然是 legacy，
-      //    Planner 的方案只作为红色虚线 overlay 叠在上面（这是"两套结果并排看"的语义）。
+      //    只在 **planner** 模式接管。f3 模式根本不走这条链路
+      //    （它自己产完整 Scene，见 src/f3）。
       const pf = mode === 'planner' ? planner?.byParcel.get(patchKey(patch)) : undefined;
       if (pf) {
         scene.surfaces.push(...pf.surfaces);
@@ -176,10 +176,6 @@ export function buildScene(model: Model, opts: SceneOptions = {}): Scene {
       } satisfies LotInfo);
     }
 
-    // shadow 模式：Planner 的方案作为叠加层（2D 画红色虚线）
-    if (planner && opts.planningMode === 'shadow') {
-      scene.overlay = { solids: planner.overlay.solids, surfaces: planner.overlay.surfaces };
-    }
     // 逐地块报告挂到 scene 上，供 Debug HUD 读取
     if (planner) scene.planner = planner;
   }

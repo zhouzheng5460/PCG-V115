@@ -46,7 +46,6 @@ const net = buildRoadNet(m);
 
 const legacyScene = buildScene(m, { planningMode: 'legacy' });
 const plannerScene = buildScene(m, { planningMode: 'planner' });
-const shadowScene = buildScene(m, { planningMode: 'shadow' });
 
 const bundle = buildPlannerBundle(m, net, 'planner');
 
@@ -95,15 +94,18 @@ ok('Planner 确实接管了地块', bundle.stats.covered > 0, `${bundle.stats.co
   void legacyKept;
 }
 
-// ---------------------------------------------------------------- ③ Shadow 模式
+// ---------------------------------------------------------------- ③ Shadow 模式已移除
+//
+// 用户要求去掉这个"两套方案叠着看"的调试模式：现在模式只有
+// legacy / planner / f3 三种，f3 走的是独立的城市合成链路。
 {
-  ok('Shadow 有 overlay', !!shadowScene.overlay && shadowScene.overlay.solids.length > 0,
-    `${shadowScene.overlay?.solids.length ?? 0} 个`);
+  // f3 是独立链路：buildScene 收到它时必须按 legacy 处理（这条路径在页面上不会被调用，
+  // 但类型上允许 —— 所以要有断言保证"误调用也不会把 Planner 拉起来"）
+  const f3Scene = buildScene(m, { planningMode: 'f3' });
   ok(
-    'Shadow 主场景与 legacy 一致（几何数量相同）',
-    shadowScene.solids.length === legacyScene.solids.length &&
-      shadowScene.surfaces.length === legacyScene.surfaces.length,
-    `shadow ${shadowScene.solids.length}/${shadowScene.surfaces.length} vs legacy ${legacyScene.solids.length}/${legacyScene.surfaces.length}`
+    'f3 不会污染 legacy 场景装配（收到 f3 按 legacy 处理）',
+    f3Scene.solids.length === legacyScene.solids.length && f3Scene.surfaces.length === legacyScene.surfaces.length,
+    `f3 ${f3Scene.solids.length}/${f3Scene.surfaces.length} vs legacy ${legacyScene.solids.length}/${legacyScene.surfaces.length}`
   );
 }
 

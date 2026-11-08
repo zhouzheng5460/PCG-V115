@@ -132,7 +132,23 @@ function renderModernSVG(model: Model, opts: SvgOptions): string {
     if (p.kind === 'tree' || p.kind === 'treeSmall' || p.kind === 'conifer') {
       out.push(`<circle cx="${p.at.x.toFixed(2)}" cy="${p.at.y.toFixed(2)}" r="${(0.28 * p.scale).toFixed(2)}" fill="${css(p.kind === 'conifer' ? 'leafDark' : 'leaf')}"/>`);
     } else if (p.kind === 'lamp' || p.kind === 'lampDouble') {
-      out.push(`<circle cx="${p.at.x.toFixed(2)}" cy="${p.at.y.toFixed(2)}" r="0.09" fill="${css('markWhite')}"/>`);
+      /**
+       * 路灯在 2D 里也要表现朝向。
+       *
+       * 旧版只画一个白圆点，灯臂`rot`（约定指向车行道中线）完全看不出来，
+       * 于是"灯是不是装在正确一侧 / 有没有朝向马路"只能去 3D 里核对。
+       * 这里按与 `export/props.ts` 相同的 rot 画一根短灯臂 + 灯头：
+       * 杆位一个小圆点，末端一个更小的白点，方向与 3D 完全一致。
+       */
+      const arm = 0.44 * (p.scale || 1);
+      const ex = p.at.x + Math.cos(p.rot) * arm;
+      const ey = p.at.y + Math.sin(p.rot) * arm;
+      const white = css('markWhite');
+      out.push(
+        `<line x1="${p.at.x.toFixed(2)}" y1="${p.at.y.toFixed(2)}" x2="${ex.toFixed(2)}" y2="${ey.toFixed(2)}" stroke="${white}" stroke-width="0.045" stroke-linecap="round"/>`
+      );
+      out.push(`<circle cx="${p.at.x.toFixed(2)}" cy="${p.at.y.toFixed(2)}" r="0.075" fill="${white}"/>`);
+      out.push(`<circle cx="${ex.toFixed(2)}" cy="${ey.toFixed(2)}" r="0.055" fill="${white}"/>`);
     }
   }
 

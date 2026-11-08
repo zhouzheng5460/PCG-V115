@@ -49,7 +49,15 @@ import { surfaceArea } from '../town/planning/core/surface';
 import type { SiteTypology } from '../town/planning/core/types';
 import type { PathFeature, PropFeature, SolidFeature, SurfaceFeature } from './types';
 
-export type PlanningMode = 'legacy' | 'planner' | 'shadow';
+/**
+ * 场景装配模式。
+ *
+ * `f3` 是规则驱动的城市合成器：它**不经过** buildScene / Planner，
+ * 而是自己产一份完整 Scene 直接给 2D/3D/GLB 用。类型上列在这里是为了让
+ * `state.planningMode` 只有一份真相；`buildScene` 收到 f3 时按 legacy 处理
+ * （这条路径在此模式下根本不会被调用）。
+ */
+export type PlanningMode = 'legacy' | 'planner' | 'f3';
 
 /**
  * R1.3 受控开关：启用新内部交通网络的地块（patchKey）。
@@ -169,7 +177,6 @@ export interface PlannerBundle {
   byParcel: Map<string, PlannerParcelFeatures>;
   /** 每块地的报告（含没接管的） */
   reports: Map<string, PlannerParcelReport>;
-  /** shadow 模式：Planner 的特征（画成红色虚线） */
   overlay: PlannerParcelFeatures;
   /** R1.4 诊断：每块地的完整网络 / 入口 / 失败点（只有跑过求解器或尝试过的地块才有） */
   circulationDebug: Map<string, import('../town/planning/circulation/adopt').CirDebug>;
@@ -385,8 +392,8 @@ export function buildPlannerBundle(
       };
     }
 
-    // shadow 模式：planner 的结果只进 overlay，不进主场景
-    if (mode === 'shadow') {
+    // （shadow 模式已移除：现在是 legacy / planner / f3 三种）
+    if (false) {
       overlay.surfaces.push(...feats.surfaces);
       overlay.solids.push(...feats.solids);
       overlay.paths.push(...feats.paths);

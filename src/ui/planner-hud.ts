@@ -28,7 +28,7 @@ export interface PlannerHudState {
 const MODE_LABEL: Record<PlanningMode, string> = {
   legacy: 'Legacy',
   planner: 'Planner',
-  shadow: 'Shadow',
+  f3: 'F3 城市',
 };
 
 const STATE_LABEL: Record<string, string> = {

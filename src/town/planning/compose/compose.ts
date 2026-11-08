@@ -687,9 +687,26 @@ function dedupeOverlaps(candidates: SubdivisionCandidate[], notes: ComposeNote[]
  * 每一段都能单独跑（阶段验收），也能串起来跑（总平面）。
  * 串起来时顺序不能换：B 需要 A 的可建域，C 需要 A 的地块与 B 的建筑。
  */
+/**
+ * 合成用的分割参数。
+ *
+ * `SUBDIVIDE` 里住宅是 70×70 m ≈ 4900 m² 一块 —— 那是"一个居住街区"的尺度，
+ * 不是"一个建筑组团"。直接拿来用，18,000 m² 的地只切出 4 块，
+ * 一栋栋楼摊在草地上，读不出住宅小区该有的密度。
+ * 这里按"一栋板楼 + 院子"的尺度（42×36 ≈ 1500 m²）重取，
+ * 工业保持 90×80（厂房本来就该大），商业保持 26×38（店面进深决定）。
+ */
+function composeParams(input: ComposeInput) {
+  const base = defaultParams(input.typology);
+  if (input.typology === 'multi_family' || input.typology === 'single_family' || input.typology === 'hotel') {
+    return defaultParams(input.typology, { frontageM: 42, depthM: 36, targetAreaM2: 42 * 36 });
+  }
+  return base;
+}
+
 export function composeSite(input: ComposeInput, opts: ComposeOpts = {}): SiteComposition {
   const t0 = Date.now();
-  const params = opts.params ?? defaultParams(input.typology);
+  const params = opts.params ?? composeParams(input);
   const { infra, parcels, notes } = planParcels(input, opts);
 
   const br = generateBuildings(parcels.parcels, input, params, infra.roads);

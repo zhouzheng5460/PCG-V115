@@ -1,6 +1,14 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  /**
+   * poly2tri 是 UMD 包，源码里直接引用 Node 的 `global`。
+   * 浏览器没有这个全局，一 import 就抛 "global is not defined"，
+   * 整个 app 连带挂掉（3D 一片全黑）。这里给个别名。
+   */
+  define: {
+    global: 'globalThis',
+  },
   // 只扫 index.html。
   //
   // 之前没配这个，vite 会把项目里**所有** .html 当入口去扫依赖 ——

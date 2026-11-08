@@ -11,6 +11,8 @@
 import './style.css';
 import { Pt } from '../core/geom';
 import { Model, type TownStyle } from '../town/model';
+import { f3City, type F3Settings } from '../f3/ui';
+import type { CityResult } from '../f3';
 import type { ParkLevel } from '../town/parking';
 import type { LayoutKind } from '../town/grid';
 import { Zone, makeZone, area as polyArea } from '../town/zones';
@@ -21,7 +23,7 @@ import { type FieldGuide, makeGuide } from '../town/guide';
 import { View2D, type DrawMode, type RoadPick, type SelKind } from './view2d';
 import { applySnapshot, decodeSnapshot, encodeSnapshot } from './snapshot';
 import { View3D } from './view3d';
-import { buildTownMeshes } from '../export/build3d';
+import { buildTownMeshes, sceneToPrimitives } from '../export/build3d';
 import { applyScalePreset, isScalePreset } from '../road/scale-preset';
 import { ROAD_SPECS, u } from '../road/spec';
 import {
@@ -161,7 +163,7 @@ const state: State = {
   zoneThreshold: 0.35,
   layout: 'tensor',
   parkingLevel: 'normal',
-  planningMode: 'legacy',
+  planningMode: 'legacy' as PlanningMode,
   params: defaultParams(),
   vis: defaultVisibility(),
   patchEdits: new Map(),
@@ -308,6 +310,15 @@ function syncPatchSelection(): void {
 /** 统一的 3D 刷新入口：楼高 + 图层过滤 + 规划模式一起传，避免各处漏传 */
 function refresh3D(): void {
   if (currentView !== '3d' || !view3d) return;
+  // F3 是另一条链路：它自己产 Scene，直接交给同一个三维出口
+  if (state.planningMode === 'f3' && f3Result) {
+    view3d.setScene(f3Result.scene, {
+      layers: makeFilter(state.vis),
+      hiliteLotRoad: state.hiliteLotRoad,
+      cityRadius: model.cityRadius || 90,
+    });
+    return;
+  }
   view3d.setModel(model, {
     heightScale: state.heightScale,
     layers: makeFilter(state.vis),
@@ -318,6 +329,41 @@ function refresh3D(): void {
     pattern: state.patternMode,
     parkingProvider: state.parkingProvider,
   });
+}
+
+// ---------------------------------------------------------------- F3 · 规则驱动城市
+
+/** 页面上的 F3 风貌设置（顶部 chip 组） */
+const f3Settings: F3Settings = { style: 'structured', program: 'mixed', density: 'medium' };
+/** 当前这份 F3 城市（切到三位/导出都读它，保证三处同源） */
+let f3Result: CityResult | null = null;
+
+/**
+ * 生成 / 取回 F3 城市并接到画布上。
+ *
+ * 它**不经过** model：城市边界取页面上的城市半径，其余全部由 F3 自己算。
+ * 这也意味着 F3 模式下左侧的"图层"开关照旧有效（Scene 的 group 命名与
+ * 老链路一致），但"地块/街区"这类 legacy 计数没有意义 —— 统计条会换文案。
+ */
+function applyF3(): void {
+  const t0 = performance.now();
+  try {
+    f3Result = f3City(model.cityRadius || 90, state.seed, f3Settings, state.heightScale, state.guides);
+  } catch (e) {
+    toast(`F3 生成失败：${(e as Error).message}`, true);
+    return;
+  }
+  view2d.setSceneOverride(f3Result.scene);
+  view2d.draw();
+  if (currentView === '3d') refresh3D();
+  buildLeft();
+  updateStats();
+  updatePlannerHud();
+  const ms = Math.round(performance.now() - t0);
+  const st = f3Result.stats;
+  toast(
+    `F3 ${f3Settings.style}：${st.blockCount} 街区 · ${st.parcelCount} 地块 · ${st.buildingCount} 建筑 · 道路 ${st.roadLengthM} m · ${ms} ms`
+  );
 }
 
 // ---------------------------------------------------------------- R8 · 规划模式
@@ -337,6 +383,18 @@ function applyPlanningMode(mode: PlanningMode): void {
   document.querySelectorAll<HTMLButtonElement>('.mode-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.mode === mode)
   );
+  // F3 的风貌条只在这条链上出现
+  const chips = document.getElementById('f3-modes');
+  if (chips) chips.hidden = mode !== 'f3';
+
+  // F3 模式下画布读的是外部 Scene；切回其它模式要把覆盖撤掉，否则会一直显示 F3 的城
+  if (mode !== 'f3') view2d.setSceneOverride(null);
+
+  if (mode === 'f3') {
+    applyF3();
+    return;
+  }
+
   view2d.setSceneOptions({
     planningMode: mode,
     circulation: state.circulationMode,
@@ -354,9 +412,7 @@ function applyPlanningMode(mode: PlanningMode): void {
   toast(
     mode === 'legacy'
       ? 'Legacy：全部走现有链路'
-      : mode === 'planner'
-        ? `Planner：接管 ${n} 块地（工业 / 多层住宅 / 零售）`
-        : `Shadow：Planner 方案叠在 legacy 之上（${n} 块）`
+      : `Planner：接管 ${n} 块地（工业 / 多层住宅 / 零售）`
   );
 }
 
@@ -372,6 +428,12 @@ function regenerate(): void {
   try {
     model = createModel();
     view2d.setModel(model, { keepView: true });
+    if (state.planningMode === 'f3') {
+      applyF3();
+      syncPatchSelection();
+      syncHashSoon();
+      return;
+    }
     syncPatchSelection();
     applyViewFlags();
     if (currentView === '3d') refresh3D();
@@ -420,6 +482,14 @@ function updateGuides(guides: FieldGuide[]): void {
 }
 
 function updateStats(): void {
+  if (state.planningMode === 'f3' && f3Result) {
+    const st = f3Result.stats;
+    const f = f3Settings;
+    $('#stats').innerHTML =
+      `<div>${st.blockCount} 街区 · ${st.parcelCount} 地块 · ${st.buildingCount} 建筑</div>` +
+      `<div style="opacity:.62;margin-top:2px;font-size:10px">F3 ${f.style} / ${f.program} / ${f.density} · 道路 ${st.roadLengthM} m · 车位 ${st.parkingBays} · 树 ${st.treeCount} · GFA ${(st.gfaM2 / 1000).toFixed(0)}k m²</div>`;
+    return;
+  }
   const s = model.stats();
   // 建筑数取**场景**里的实际值：Planner 模式下场景和 model 不是一回事
   // （model 统计的是 legacy 生成的建筑），显示 model 的数字会让人以为没生效。
@@ -1553,12 +1623,19 @@ function bindModeSeg(sel: string): void {
 
 function doExport(): void {
   try {
-    const prims = buildTownMeshes(model, {
-      heightScale: state.heightScale,
-      layers: makeFilter(state.vis),
-      // 导出所见即所得：当前是哪个规划模式就导出哪个
-      planningMode: state.planningMode,
-    });
+    const prims =
+      state.planningMode === 'f3' && f3Result
+        ? sceneToPrimitives(f3Result.scene, {
+            layers: makeFilter(state.vis),
+            hiliteLotRoad: state.hiliteLotRoad,
+            cityRadius: model.cityRadius || 90,
+          })
+        : buildTownMeshes(model, {
+            heightScale: state.heightScale,
+            layers: makeFilter(state.vis),
+            // 导出所见即所得：当前是哪个规划模式就导出哪个
+            planningMode: state.planningMode,
+          });
     const glb = exportGLB(prims, 'TownForge');
     const blob = new Blob([glb.bytes as unknown as BlobPart], { type: 'model/gltf-binary' });
     const url = URL.createObjectURL(blob);
@@ -1919,10 +1996,32 @@ function boot(): void {
   document.querySelectorAll<HTMLButtonElement>('.mode-btn').forEach((btn) => {
     btn.addEventListener('click', () => applyPlanningMode(btn.dataset.mode as PlanningMode));
   });
+  // URL 参数：?f3style=organic&f3program=residential&f3density=high
+  // （自动化截图 / 分享链接用；与顶部 chip 同步高亮）
+  {
+    const q = new URLSearchParams(location.search);
+    for (const k of ['style', 'program', 'density'] as (keyof F3Settings)[]) {
+      const v = q.get(`f3${k}`);
+      if (!v) continue;
+      (f3Settings as unknown as Record<string, string>)[k] = v;
+      document.querySelectorAll<HTMLButtonElement>(`.f3-chip[data-f3="${k}"]`).forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+    }
+  }
+  // F3 · 风貌 / 用途 / 密度：改一个就重算一次（有缓存，切回来是秒出）
+  document.querySelectorAll<HTMLButtonElement>('.f3-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.f3 as keyof F3Settings;
+      const v = btn.dataset.v as string;
+      if (!k || !v) return;
+      (f3Settings as unknown as Record<string, string>)[k] = v;
+      document.querySelectorAll<HTMLButtonElement>(`.f3-chip[data-f3="${k}"]`).forEach((b) => b.classList.toggle('active', b === btn));
+      if (state.planningMode === 'f3') applyF3();
+    });
+  });
   // URL 参数 ?mode=planner / ?mode=shadow（自动化截图 / 手测用）
   {
     const m = new URLSearchParams(location.search).get('mode');
-    if (m === 'planner' || m === 'shadow' || m === 'legacy') applyPlanningMode(m);
+    if (m === 'planner' || m === 'f3' || m === 'legacy') applyPlanningMode(m);
     else updatePlannerHud();
   }
   // URL 参数 ?view=3d / ?view=2d（自动化截图用：不用点 tab 就能进三维）

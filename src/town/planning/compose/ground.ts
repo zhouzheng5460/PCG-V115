@@ -12,7 +12,7 @@
 
 import { Pt } from '../../../core/geom';
 import { surface, surfaceArea, surfaceIntersect, surfaceSubtract, surfaceUnion, type PlanSurface } from '../core/surface';
-import { bufferPolyline } from '../../parking/placemaker';
+import { bufferPolyline } from '../../../core/polyline';
 import { clearanceField } from '../adapt/geom';
 import { U } from '../subdivision/types';
 import type { ComposeInput, ComposeNote, GroundKind, GroundPatch, InternalRoad, ParcelPlan, ParkingArea, SiteBuilding } from './types';
@@ -155,6 +155,36 @@ export function buildGround(g: GroundInput): GroundResult {
       cursor = carve(cursor, walks);
     }
 
+    /**
+     * ③-a2 商业沿街种植带（4 m）。
+     *
+     * 商业街区以硬质为主是对的，但"0 绿地"读起来像停车场 —— 任务书的布局语法里
+     * 明写"绿化主要出现在街道树池、广场边缘和休憩空间"。所以在每条临街面前
+     * 切出 4 m 种植带，它同时是行道树的落位（树必须有土才种得进去）。
+     */
+    if (g.input.typology === 'retail' && bs.length > 0) {
+      const fr = p.candidate.frontages.slice().sort((a, b2) => b2.lengthM - a.lengthM)[0];
+      if (fr) {
+        const ring = bufferPolyline([fr.edge[0], fr.edge[1]], U(4));
+        if (ring) {
+          const strip = intersectAll(cursor, [surface(ring)]).filter((q) => surfaceArea(q) > 0.05);
+          const sa = strip.reduce((a, q) => a + M2(surfaceArea(q)), 0);
+          if (sa > 12) {
+            for (const c of strip) {
+              ground.push({
+                kind: 'planting',
+                surface: c,
+                areaM2: M2(surfaceArea(c)),
+                purpose: `沿街种植带（${M2(surfaceArea(c)).toFixed(0)} m²，4 m 宽）：行道树与橱窗之间的缓冲，兼做顾客停留的边界`,
+                parcelId: p.id,
+              });
+            }
+            cursor = carve(cursor, strip);
+          }
+        }
+      }
+    }
+
     // ③-b cursor 剩下的，全部按用途分类（不存在"再扣一次"的环节，所以不会重叠）
     for (const r of cursor) {
       const a = M2(surfaceArea(r));
@@ -237,8 +267,26 @@ function classify(
    * 现在住宅只给 6 m 内的小块做门前铺装，其余交给庭院/绿地；
    * 商业反过来（沿街界面本来就是硬地），所以阈值按用地类型分开。
    */
-  const apron = retail ? 12 : 6;
-  const apronMax = retail ? 4000 : 420;
+  // 商业的"前场"其实覆盖整个店铺转身空间：12 m 太小，店铺背后会露出草坪；
+  // 20 m / 12000 m² 的上限让整块商业地用硬质铺装收口（游戏场景里也更像商业街）
+  /**
+   * 工业厂区：厂房周边一律是**硬质货场**。
+   *
+   * 任务书的工业语法是"厂房附近有清晰的硬质货场和装卸空间"。
+   * 早先按住宅那套（离墙 6 m 才铺装）判，厂区里 20 m 宽的装卸面全被判成绿地，
+   * 一眼看过去是"两间仓库站在公园里"，完全没有工业园区的样子。
+   */
+  const industrial = typ === 'industrial' || typ === 'data_center';
+  // 只把**紧挨厂房**的一圈判成货场（15 m）。全判成货场会让厂区一根草都没有，
+  // 而任务书的工业语法要求"绿化集中在周边缓冲带、办公前场和入口"。
+  if (industrial && bs.length > 0 && dWall <= 15 && nearStreet > 9 && areaM2 <= 2400) {
+    return {
+      kind: 'loading',
+      purpose: `厂房硬质货场（${areaM2.toFixed(0)} m²）：装卸、临时堆场与货车回转，不做绿化`,
+    };
+  }
+  const apron = retail ? 20 : 6;
+  const apronMax = retail ? 6000 : 420;
   if (dWall <= apron && areaM2 <= apronMax) {
     return { kind: 'forecourt', purpose: `建筑前场（${areaM2.toFixed(0)} m²）：紧贴外墙 ${dWall.toFixed(0)} m，主入口集散与落客` };
   }
@@ -254,10 +302,18 @@ function classify(
   if (nearStreet <= 10 && areaM2 < 900) {
     return { kind: 'planting', purpose: `道路种植带（${areaM2.toFixed(0)} m²）：沿街界面绿化，遮挡停车与设备` };
   }
+  /**
+   * 又大又空的地：**做成集中绿地（草坪/树林）**，而不是标成"未设计"。
+   *
+   * F2.4-C 那轮把它标成 `unassigned` 是为了诚实（"算法没想好这块干什么"），
+   * 但在这轮的验收标准下，一块 4000 m² 的土黄色 `unassigned` 就是"地面没处理完"。
+   * 任务书第七节给的处置很明确：面积较大 → 生成完整草坪、树林或公共活动场。
+   * 于是改为绿地，并在 purpose 里写明"没有明确功能依托" —— 诚实保留，但不难看。
+   */
   if (areaM2 > 1500 && dWall > 24 && clearM >= 14) {
     return {
-      kind: 'unassigned',
-      purpose: `距最近建筑 ${dWall.toFixed(0)} m、净宽 ${clearM.toFixed(0)} m，没有明确功能依托，按任务书标为未设计（不填绿地充数）`,
+      kind: 'green',
+      purpose: `集中绿地/树林（${areaM2.toFixed(0)} m²，距最近建筑 ${dWall.toFixed(0)} m）：没有明确功能依托，按大草坪与树阵处理`,
     };
   }
   if (retail && areaM2 > 600 && areaM2 <= 1500) {

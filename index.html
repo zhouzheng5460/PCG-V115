@@ -17,11 +17,34 @@
           <button class="tab active" data-view="2d">平面编辑</button>
           <button class="tab" data-view="3d">三维预览</button>
         </div>
-        <!-- 规划模式（R8）：legacy = 现有链路；planner = Planner 接管三类地块；shadow = legacy + Planner 虚线叠加 -->
-        <div class="modes" id="modes" title="规划模式（R8 前端接入）">
+        <!--
+          生成模式：
+            legacy  = 现有链路（Voronoi 地块 + 地块内容）
+            planner = Planner 接管三类地块（工业 / 多层住宅 / 零售）
+            f3      = 规则驱动的城市合成器（城市边界 → 路网 → 街区 → 地块 → 建筑 → 地面）
+        -->
+        <div class="modes" id="modes" title="生成模式">
           <button class="mode-btn active" data-mode="legacy">Legacy</button>
           <button class="mode-btn" data-mode="planner">Planner</button>
-          <button class="mode-btn" data-mode="shadow">Shadow</button>
+          <button class="mode-btn" data-mode="f3">F3 城市</button>
+        </div>
+        <!-- F3 的城市风貌条（只在 F3 模式下出现） -->
+        <div class="modes f3-modes" id="f3-modes" hidden title="F3 城市风貌">
+          <span class="f3-tag">风貌</span>
+          <button class="f3-chip active" data-f3="style" data-v="structured">规则</button>
+          <button class="f3-chip" data-f3="style" data-v="organic">有机</button>
+          <button class="f3-chip" data-f3="style" data-v="campus">园区</button>
+          <span class="f3-sep"></span>
+          <span class="f3-tag">用途</span>
+          <button class="f3-chip active" data-f3="program" data-v="mixed">混合</button>
+          <button class="f3-chip" data-f3="program" data-v="residential">居住</button>
+          <button class="f3-chip" data-f3="program" data-v="commercial">商业</button>
+          <button class="f3-chip" data-f3="program" data-v="industrial">工业</button>
+          <span class="f3-sep"></span>
+          <span class="f3-tag">密度</span>
+          <button class="f3-chip" data-f3="density" data-v="low">低</button>
+          <button class="f3-chip active" data-f3="density" data-v="medium">中</button>
+          <button class="f3-chip" data-f3="density" data-v="high">高</button>
         </div>
         <div class="actions">
           <button id="btn-export" class="primary">导出 GLB</button>

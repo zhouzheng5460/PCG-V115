@@ -11,3 +11,8 @@ export { generateBuildings, gfaOf } from './buildings';
 export { placeParking, parkingDemandOf } from './parking';
 export { buildGround } from './ground';
 export { validateComposition } from './validate';
+
+// F2.4-D · 游戏级场景输出
+export { sceneFromSite, PALETTE, MAT_LABEL, solidPaint, hex, shade, type SiteScene, type ScenePoly, type SceneSolid, type SceneTree, type MatKey } from './scene';
+export { visualScore, type VisualScore } from './score';
+export { composeCandidates, type ComposeCandidate, type CandidatesResult } from './candidates';

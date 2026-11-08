@@ -170,6 +170,9 @@ export function validateComposition(v: ValidateInput): { validation: ComposeVali
     for (let j = i + 1; j < v.buildings.length; j++) {
       const a = v.buildings[i];
       const bb = v.buildings[j];
+      // 连续沿街店面是**故意共墙**的（一间挨一间才是商业界面），
+      // 它们之间没有间距不是缺陷，跳过这一对。
+      if (a.grammar === 'street-shop-line' && bb.grammar === 'street-shop-line' && a.parcelId === bb.parcelId) continue;
       if (Pt.distance(a.center, bb.center) * 7 > Math.max(a.widthM, a.depthM) + Math.max(bb.widthM, bb.depthM) + 6) continue;
       const g = gapBetween(a.surface, bb.surface);
       if (g < minGap) minGap = g;

@@ -213,6 +213,13 @@ export class View2D {
 
   /** 与 3D 共用的场景快照；模型 revision 变了才重建 */
   private scene: Scene | null = null;
+  /**
+   * 外部直接给的场景（F3 城市合成器）。
+   *
+   * 有它的时候整个 2D 画布只画这一份 Scene：不再读 model.patches 的轮廓 /
+   * 用地着色 / 路网调试层，因为那些都是**另一条链路**的东西，混着画就是两层城市。
+   */
+  private override: Scene | null = null;
   private sceneRev = -1;
   /** 场景开关：标线 / 街道设施 / 规划模式（R8） */
   private sceneOpts: {
@@ -280,6 +287,7 @@ export class View2D {
     const prevR = this.model?.cityRadius ?? 0;
     this.model = model;
     this.scene = null;
+    this.override = null;
     this.selectedArtery = null;
     this.hoverVertex = null;
     const sameScale = prevR > 0 && Math.abs(model.cityRadius - prevR) / prevR < 0.2;
@@ -290,6 +298,22 @@ export class View2D {
   /** 模型重建后调用，下次绘制会重新组装场景 */
   invalidate(): void {
     this.scene = null;
+  }
+
+  /**
+   * 换成外部场景（F3）。传 null 回到"从 model 现算"。
+   *
+   * 这里不清 `model`：切回 legacy 时还要用；但视口保持不动，
+   * 因为 F3 的城市半径和 legacy 是同一档，用户不用重新对位。
+   */
+  setSceneOverride(scene: Scene | null): void {
+    this.override = scene;
+    this.scene = null;
+    this.requestDraw();
+  }
+
+  get hasOverride(): boolean {
+    return this.override !== null;
   }
 
   /**
@@ -308,6 +332,7 @@ export class View2D {
    * 而不是等下一次绘制。
    */
   ensureScene(): Scene {
+    if (this.override) return this.override;
     if (!this.scene || this.sceneRev !== this.model.revision) {
       this.scene = buildScene(this.model, this.sceneOpts);
       this.sceneRev = this.model.revision;
@@ -1334,8 +1359,8 @@ export class View2D {
 
     const px = 1 / this.cam.scale; // 1 屏幕像素对应的世界单位
 
-    // 地块轮廓（结构覆盖层）
-    if (this.showBlocks) {
+    // 地块轮廓（结构覆盖层）—— F3 模式下没有 model.patches 这回事
+    if (this.showBlocks && !this.override) {
       // 地块轮廓：浅色晕圈 + 深色主线两遍描。
       //
       // 原来一道 rgba(120,116,106,0.45) 的灰线，在米色铺装上几乎看不见 ——
@@ -1375,7 +1400,7 @@ export class View2D {
     // 用地类型着色：按 LandUse 铺一层半透明色，放得够大时再标名字。
     // 放在铺装之上、建筑之下 —— 建筑盖住的地方本来也不需要读用地色，
     // 而空地和绿地被染上色之后，"哪里是 CBD、哪里是绿地"一眼就能分出来。
-    if (this.showUse) {
+    if (this.showUse && !this.override) {
       ctx.save();
       ctx.globalAlpha = 0.42;
       for (const patch of this.model.patches) {
@@ -1466,7 +1491,8 @@ export class View2D {
       ctx.setLineDash([]);
     }
 
-    // 道具：树画成**不同绿的方块**（和三维里的立方体一一对应），路灯画成小圆点。
+    // 道具：树画成**不同绿的方块**（和三维里的立方体一一对应），
+    // 路灯画「杆点 + 短灯臂」（rot 指向车行道中线）。
     // 原来树是一个统一绿点，看不出是树、也分不清品种；方块 + 6 档绿之后
     // 俯视图上直接能读出"这是一片林子"。
     for (const pr of scene.props) {
@@ -1476,10 +1502,22 @@ export class View2D {
         ctx.fillStyle = treeGreenCss(pr.seed, pr.kind === 'treeSmall' ? -0.04 : 0);
         ctx.fillRect(pr.at.x - half, pr.at.y - half, half * 2, half * 2);
       } else if (pr.kind === 'lamp' || pr.kind === 'lampDouble') {
+        // 灯臂朝向（rot 指向车行道中线）在 2D 里也要看得见：
+        // 杆位一个圆点 + 一根短灯臂 + 灯头小方块，与 3D / SVG 同一份 rot。
+        const arm = 0.44 * pr.scale;
+        const ex = pr.at.x + Math.cos(pr.rot) * arm;
+        const ey = pr.at.y + Math.sin(pr.rot) * arm;
+        ctx.strokeStyle = LAMP;
+        ctx.lineWidth = 0.07;
+        ctx.beginPath();
+        ctx.moveTo(pr.at.x, pr.at.y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
         ctx.fillStyle = LAMP;
         ctx.beginPath();
-        ctx.arc(pr.at.x, pr.at.y, 0.16 * pr.scale, 0, Math.PI * 2);
+        ctx.arc(pr.at.x, pr.at.y, 0.14 * pr.scale, 0, Math.PI * 2);
         ctx.fill();
+        ctx.fillRect(ex - 0.075 * pr.scale, ey - 0.075 * pr.scale, 0.15 * pr.scale, 0.15 * pr.scale);
       } else if (pr.kind === 'hedge') {
         // 绿篱：和三维里同一块矮方块（1.5 × 0.9 m），按朝向转一下。
         // 画成短矩形而不是圆点，俯视图上才读得出"一排修剪过的灌木"。
@@ -1530,39 +1568,14 @@ export class View2D {
       }
     }
 
-    // ---- shadow 模式：Planner 的方案叠在 legacy 之上（红色虚线轮廓）
-    //
-    // 这一层是 R8 的"一眼看出两套方案不同"的载体：不填色、只画轮廓，
-    // 所以 legacy 的实体形态仍然可读，Planner 的体块则像投影一样浮在上面。
-    if (scene.overlay) {
-      ctx.save();
-      ctx.setLineDash([5 * px, 3.5 * px]);
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(224,86,58,0.92)';
-      ctx.lineWidth = 1.7 * px;
-      for (const s of scene.overlay.solids) {
-        this.tracePath(s.ring);
-        ctx.stroke();
-      }
-      ctx.setLineDash([3 * px, 3 * px]);
-      ctx.strokeStyle = 'rgba(224,86,58,0.45)';
-      ctx.lineWidth = 1.1 * px;
-      for (const s of scene.overlay.surfaces) {
-        if (!this.vis(layerOfSurface(s))) continue;
-        this.tracePath(s.ring);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
     // ---- 道路结构覆盖：红线 / 中线 / 路口点
     // 这三样是"读懂路网规则"的关键：红线告诉你每条路占多宽、中线告诉你等级分布、
     // 路口点告诉你连通性（顺带把断头路标成红叉）。
-    if (this.showCirExisting || this.showCirNew || this.showCirMerged || this.showCirPortals || this.showCirUnreachable) {
+    if (!this.override && (this.showCirExisting || this.showCirNew || this.showCirMerged || this.showCirPortals || this.showCirUnreachable)) {
       this.drawCirculationDebug(ctx, px);
     }
 
-    if (this.showRedline || this.showCenterline || this.showJunctions) {
+    if (!this.override && (this.showRedline || this.showCenterline || this.showJunctions)) {
       const net = this.roadNet();
       const hue: Record<string, string> = {
         arterial: '#c4553f',

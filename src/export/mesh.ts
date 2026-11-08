@@ -8,6 +8,7 @@
 // a_bot → b_top → b_bot。
 
 import earcut from 'earcut';
+import * as poly2tri from 'poly2tri';
 import polygonClipping from 'polygon-clipping';
 import { Pt } from '../core/geom';
 
@@ -39,6 +40,93 @@ const DEGEN_AREA2 = 1e-9;
  * 洞环只能被丢掉，中庭 / 环路 / 停车岛在 3D 里永远是实心。
  * 顶点按 [外环…, 洞1…, 洞2…] 拼接，holeIndices 记录每个洞的起始索引。
  */
+interface SweepContextLike {
+  addHole(polyline: { x: number; y: number }[]): SweepContextLike;
+  triangulate(): SweepContextLike;
+  getTriangles(): { getPoint(i: number): { x: number; y: number } }[];
+}
+
+/** 点的坐标键：微米级。collapseRing 已保证相邻点间距 > 0.7 mm，所以不会撞。 */
+function ptKey(p: { x: number; y: number }): string {
+  return `${Math.round(p.x * 1e6)}|${Math.round(p.y * 1e6)}`;
+}
+
+/**
+ * 约束 Delaunay 三角化（poly2tri）。失败返回 null，由 earcut 兜底。
+ *
+ * 为什么需要：earcut 是耳切法，遇到「一条长直边对一串密集弧点」（我们的路网面
+ * 到处都是：直边几十米 + 转角 6 段圆弧）会沿环拉出窄三角扇 —— 单三角形面积
+ * 接近 0、法线相同，3D 里就是路面上细长的明暗条纹。
+ * CDT 会**最大化最小角**，同样的环切出来接近等边，这是 three-roads 用它的原因
+ * （也正因为如此，那套"按长度均分长边"的采样平衡只有配 CDT 才有意义）。
+ *
+ * poly2tri 的要求在这里都已满足：环不自交、无重复点（`collapseRing` + `healRing`），
+ * 外环 CCW、洞 CW（下面按需反转）。它遇到病态输入会抛 PointError，直接兜底。
+ */
+function triangulateCDT(ring: Pt[], holes: Pt[][]): number[] | null {
+  if (ring.length < 3) return null;
+  try {
+    /**
+     * 索引必须**严格等于** `flatPolygon` 里 positions 的顺序：外环在前、
+     * 洞依次跟上（**原始顺序**，不是反转后的顺序）。
+     *
+     * 踩过的坑：这里曾经用 `next++` 给"反转后的洞点"顺次编号，而 flat 里的
+     * 洞点仍是原始顺序 —— 于是洞内第 0 个点被映射成了洞内最后一个点。
+     * 三角形顶点被整体错位，切出来的就是**横跨街区的大三角**：俯视看是
+     * 转角上的尖刺，3D 看是路面上一块缺失/发黑的补丁（用户三张截图）。
+     * 外环没有洞时编号恰好一致，所以只有"带洞的面"才出问题 ——
+     * 也正好只有街区内侧那些环带（人行道 / 路缘 / 道路用地）带洞。
+     */
+    const index = new Map<string, number>();
+    let next = 0;
+    for (const p of ring) {
+      const k = ptKey(p);
+      if (!index.has(k)) index.set(k, next);
+      next++;
+    }
+    const holeInput: { x: number; y: number }[][] = [];
+    for (const h of holes) {
+      if (h.length < 3) continue;
+      for (const p of h) {
+        const k = ptKey(p);
+        if (!index.has(k)) index.set(k, next);
+        next++;
+      }
+      // poly2tri 习惯：外环逆时针、洞顺时针（只是喂给它的绕向，索引照旧）
+      holeInput.push(h.slice().reverse().map((p) => ({ x: p.x, y: p.y })));
+    }
+    /**
+     * 用**命名空间导入**而不是 `import { SweepContext }`：poly2tri 是 UMD 包，
+     * vite 的 CJS 互操作对它的具名导出识别不稳，具名导入在浏览器里会直接
+     * `undefined` —— 整个 mesh 模块连带挂掉，3D 一片全黑。
+     */
+    const Ctx = (poly2tri as unknown as { SweepContext: new (c: { x: number; y: number }[]) => SweepContextLike })
+      .SweepContext;
+    if (!Ctx) return null;
+    const ctx = new Ctx(ring.map((p) => ({ x: p.x, y: p.y })));
+    for (const h of holeInput) ctx.addHole(h);
+    ctx.triangulate();
+    const out: number[] = [];
+    for (const t of ctx.getTriangles()) {
+      const a = index.get(ptKey(t.getPoint(0)));
+      const b = index.get(ptKey(t.getPoint(1)));
+      const c = index.get(ptKey(t.getPoint(2)));
+      if (a === undefined || b === undefined || c === undefined) continue;
+      if (a === b || b === c || a === c) continue;
+      out.push(a, b, c);
+    }
+    return out.length >= 3 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 三角化：CDT 优先，earcut 兜底。
+ *
+ * 两者的三角形绕序不同，统一按「面积符号」校正成与输入环一致的 CCW 正面，
+ * 否则一半三角形背面朝上，3D 里会出现"斑驳"的路面。
+ */
 export function triangulate(ring: Pt[], holes: Pt[][] = []): number[] {
   if (ring.length < 3) return [];
   const flat: number[] = [];
@@ -49,9 +137,17 @@ export function triangulate(ring: Pt[], holes: Pt[][] = []): number[] {
     holeIndices.push(flat.length / 2);
     for (const p of h) flat.push(p.x, p.y);
   }
-  const idx = earcut(flat, holeIndices.length > 0 ? holeIndices : undefined, 2);
+
+  const fromCDT = triangulateCDT(ring, holes);
+  const idx = fromCDT ?? earcut(flat, holeIndices.length > 0 ? holeIndices : undefined, 2);
+
   const out: number[] = [];
   for (let i = 0; i < idx.length; i += 3) {
+    // 绕序：**保持历史口径 `(i, i+2, i+1)`**。
+    // three.js 里平面的正向是 +y，而 (x, z) 与屏幕坐标的 y 轴相反，
+    // 所以数学意义上的逆时针在这里要反着给。earcut 与 poly2tri 输出的
+    // 绕序一致（都是数学 CCW），这一套对两者都成立；改成"按面积符号校正"
+    // 会让所有朝上的面变成背面被剔除 —— 3D 直接全黑。
     const a = idx[i];
     const b = idx[i + 2];
     const c = idx[i + 1];
@@ -134,6 +230,141 @@ function healRing(r: Pt[]): Pt[] | null {
   }
 }
 
+/**
+ * 三角化前的**环采样平衡**（借鉴 three-roads 的 junction ring sampling）。
+ *
+ * 【当前未启用 —— 实测在我们的 earcut 上无效，见下】
+ * three-roads 用它 + CDT 三角化来消除「长边对一串短边」的窄三角扇；我们这边
+ * 换成 earcut 之后，插进去的共线中点反而给耳切提供了更多"一端长、一端短"的
+ * 候选：实测细长三角占比 41.4% → 67.1%，更差。
+ * 这个函数留着是因为一旦换成 CDT（three-roads 的 packages/cdt），它是必需的。
+ * 现在的替代方案是下面的 `collapseRing`（只做减法）。
+ *
+ * 布尔并集出来的环，常见形态是「一侧是几十米的长直边，另一侧是每 0.5 m 一个
+ * 采样点的圆弧」—— 比如一条街的人行道面：直边 120 m、转角圆弧 6 段。
+ * earcut 只能沿这种环拉出「一条长边对一串短边」的窄三角扇：单个三角形面积
+ * 接近 0、法线却完全相同，于是 3D 里路面会出现**细长的明暗条纹**，远处还会
+ * 闪成锯齿。
+ *
+ * 处理方式：把长边按 `maxLen` 均分，让相邻边的采样密度接近。
+ * 分配用**最大余数法**（three-roads 同一套）：先按长度比例给预算，余数按小数
+ * 部分从大到小补 —— 同一份预算下长边不会被饿死，短边也不会被过度细分。
+ *
+ * 只在边上插中点，**不改变形状**（点都落在原线段上），所以对几何是零风险。
+ */
+export function balanceRing(ring: Pt[], maxLen: number, budget = 192): Pt[] {
+  const n = ring.length;
+  if (n < 3 || maxLen <= 1e-6) return ring;
+  const len: number[] = [];
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    const L = Math.hypot(b.x - a.x, b.y - a.y);
+    len.push(L);
+    total += L;
+  }
+  if (total < 1e-9) return ring;
+  const want = len.map((L) => Math.max(1, Math.min(64, Math.ceil(L / maxLen))));
+  const desired = want.reduce((a, b) => a + b, 0) - n;
+  const avail = Math.max(0, budget - n);
+  if (desired <= 0) return ring;
+  const seg = want.slice();
+  if (desired > avail) {
+    for (let i = 0; i < n; i++) {
+      seg[i] = 1 + Math.floor(((want[i] - 1) * avail) / desired);
+    }
+    let left = avail - seg.reduce((a, b) => a + b - 1, 0);
+    const order = len
+      .map((_L, i) => ({ i, rem: ((want[i] - 1) * avail) / desired - (seg[i] - 1) }))
+      .sort((x, y) => y.rem - x.rem || x.i - y.i);
+    let k = 0;
+    while (left > 0 && k < order.length * 66) {
+      const o = order[k % order.length];
+      if (seg[o.i] - 1 < want[o.i] - 1) {
+        seg[o.i]++;
+        left--;
+      }
+      k++;
+    }
+  }
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    out.push(a);
+    for (let k = 1; k < seg[i]; k++) {
+      const t = k / seg[i];
+      out.push(new Pt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t));
+    }
+  }
+  return out;
+}
+
+/**
+ * 三角化前的**环塌缩**：去掉近重合点与共线点。
+ *
+ * 这是「细长三角」的真正解药，不是采样平衡。
+ *
+ * earcut 是耳切法：它靠"凸点 + 不含其他点"找耳，对**共线点**和**间距 1e-5 的
+ * 点**极其敏感 —— 三个共线点会被切成面积 ~1e-12 的针，法线仍算 (0,1,0)，
+ * 于是 3D 里就是路面上一条细到看不见、却会在远处闪的高光/暗线；
+ * 而在带洞的多边形里，这种针还会让 earcut 把耳找到洞的另一侧。
+ *
+ * （试过 three-roads 那套"按长度均分长边"的采样平衡：在他们的 CDT 下有效，
+ *  在我们的 earcut 下反而把细长三角从 41% 提到 67% —— 因为插入的共线中点
+ *  给耳切提供了更多"一端长、一端短"的候选。所以这里只做减法。）
+ *
+ * 容差 1e-4 世界单位 = 0.7 mm：远低于任何可见尺度，但足够吃掉布尔输出的毛刺。
+ */
+function collapseRing(ring: Pt[], eps = 1e-4): Pt[] {
+  let cur = ring.slice();
+  for (let pass = 0; pass < 4; pass++) {
+    const n = cur.length;
+    if (n < 3) return cur;
+    const out: Pt[] = [];
+    let removed = 0;
+    for (let i = 0; i < n; i++) {
+      const prev = out.length ? out[out.length - 1] : cur[n - 1];
+      const p = cur[i];
+      if (Pt.distance(prev, p) <= eps) {
+        removed++;
+        continue;
+      }
+      out.push(p);
+    }
+    cur = out.length >= 3 ? out : cur;
+    // 共线：点 i 到 (i-1, i+1) 连线的距离 <= eps 且落在中间
+    const m = cur.length;
+    const keep: Pt[] = [];
+    for (let i = 0; i < m; i++) {
+      const a = cur[(i - 1 + m) % m];
+      const b = cur[i];
+      const c = cur[(i + 1) % m];
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const acx = c.x - a.x;
+      const acy = c.y - a.y;
+      const L = Math.hypot(acx, acy);
+      if (L > 1e-9) {
+        const dist = Math.abs(abx * acy - aby * acx) / L;
+        const dot = abx * acx + aby * acy;
+        if (dist <= eps && dot > 0 && dot < L * L) {
+          removed++;
+          continue;
+        }
+      }
+      keep.push(b);
+    }
+    if (keep.length >= 3) cur = keep;
+    if (removed === 0) break;
+  }
+  return cur;
+}
+
+/** 采样平衡的默认粒度（世界单位）：5 m ≈ 一个路缘石的尺度 */
+export const BALANCE_MAX_LEN = 5 / 7;
+
 export function flatPolygon(
   ring: Pt[],
   y: number,
@@ -142,28 +373,29 @@ export function flatPolygon(
   color: [number, number, number],
   holes: Pt[][] = []
 ): Primitive | null {
-  let clean = ensureCCW(dedupeRing(ring));
+  let clean = ensureCCW(collapseRing(dedupeRing(ring)));
   if (clean.length < 3) return null;
   // 自交兜底：earcut 对自交环会吐出跨到多边形外的三角形（地面上的"尖刺"）
   if (selfIntersects(clean)) {
     const healed = healRing(clean);
     if (!healed) return null;
-    clean = ensureCCW(dedupeRing(healed));
+    clean = ensureCCW(collapseRing(dedupeRing(healed)));
     if (clean.length < 3 || selfIntersects(clean)) return null;
   }
   // 洞也要过同样的自交 / 去重处理，否则三角化会跨洞画出"盖住中庭"的三角形
   const cleanHoles: Pt[][] = [];
   for (const h of holes) {
-    let hh = ensureCCW(dedupeRing(h));
+    let hh = ensureCCW(collapseRing(dedupeRing(h)));
     if (hh.length < 3) continue;
     if (selfIntersects(hh)) {
       const healed = healRing(hh);
       if (!healed) continue;
-      hh = ensureCCW(dedupeRing(healed));
+      hh = ensureCCW(collapseRing(dedupeRing(healed)));
       if (hh.length < 3 || selfIntersects(hh)) continue;
     }
     cleanHoles.push(hh);
   }
+
 
   const idx = triangulate(clean, cleanHoles);
   if (idx.length === 0) return null;

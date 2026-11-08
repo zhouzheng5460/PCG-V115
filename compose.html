@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TownForge — F2.4-D 场地生成实验台</title>
+    <style>
+      :root {
+        --bg: #14171b;
+        --panel: #1b1f25;
+        --panel2: #22272e;
+        --line: #2f353d;
+        --ink: #e6e9ee;
+        --dim: #98a1ac;
+        --accent: #6fa8dc;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+        font-family: ui-sans-serif, -apple-system, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif; }
+      #wrap { display: flex; height: 100%; }
+      #side { width: 320px; flex: 0 0 320px; border-right: 1px solid var(--line); background: var(--panel);
+        display: flex; flex-direction: column; overflow: hidden; }
+      #side header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+      #side h1 { font-size: 14px; margin: 0 0 4px; letter-spacing: .02em; }
+      #side p.sub { margin: 0; font-size: 11px; color: var(--dim); line-height: 1.5; }
+      #side .body { padding: 12px 14px; overflow-y: auto; flex: 1; }
+      .grp { margin-bottom: 16px; }
+      .grp > .t { font-size: 10.5px; color: var(--dim); margin-bottom: 7px; letter-spacing: .06em; }
+      .sites { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .sites button { padding: 8px 6px; font-size: 11.5px; }
+      button { background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 5px;
+        cursor: pointer; transition: .12s; font-family: inherit; }
+      button:hover { border-color: #4a5462; }
+      button.on { background: #2c4a63; border-color: var(--accent); color: #dceaf7; }
+      .cand { width: 100%; text-align: left; padding: 9px 10px; margin-bottom: 6px; display: block; }
+      .cand b { font-size: 12px; font-weight: 600; }
+      .cand .sc { float: right; font-size: 11px; color: var(--accent); }
+      .cand small { display: block; color: var(--dim); font-size: 10.5px; margin-top: 3px; line-height: 1.45; }
+      .views { display: flex; gap: 6px; }
+      .views button { flex: 1; padding: 8px 0; font-size: 11.5px; }
+      #stats { border-top: 1px solid var(--line); padding: 10px 14px; font-size: 11px; color: var(--dim);
+        line-height: 1.65; max-height: 34%; overflow-y: auto; }
+      #stats b { color: var(--ink); font-weight: 600; }
+      #stage { flex: 1; position: relative; overflow: hidden; }
+      #three { position: absolute; inset: 0; }
+      #svg { position: absolute; inset: 0; display: none; overflow: auto; padding: 18px; }
+      #svg svg { width: 100%; height: auto; border-radius: 4px; }
+      #hud { position: absolute; left: 14px; top: 12px; font-size: 11.5px; color: var(--dim);
+        background: rgba(20,23,27,.72); padding: 7px 11px; border-radius: 5px; border: 1px solid var(--line);
+        pointer-events: none; line-height: 1.6; }
+      #hud b { color: var(--ink); }
+      #busy { position: absolute; right: 14px; top: 12px; font-size: 11.5px; color: var(--accent);
+        background: rgba(20,23,27,.8); padding: 6px 10px; border-radius: 5px; border: 1px solid var(--line); display: none; }
+      #err { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); max-width: 70%;
+        font-size: 12px; color: #ff9b8a; background: #241a1a; border: 1px solid #5a2f2a; padding: 14px 18px;
+        border-radius: 6px; display: none; white-space: pre-wrap; line-height: 1.6; }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <aside id="side">
+        <header>
+          <h1>TownForge · F2.4-D 场地生成实验台</h1>
+          <p class="sub">道路骨架 → 地块 → 建筑群 → 停车/铺装/绿地，全部由 Compose 自动生成。2D 与 3D 读同一份场景。</p>
+        </header>
+        <div class="body">
+          <div class="grp">
+            <div class="t">场地</div>
+            <div class="sites" id="sites"></div>
+          </div>
+          <div class="grp">
+            <div class="t">候选（按视觉评分排序）</div>
+            <div id="cands"></div>
+          </div>
+          <div class="grp">
+            <div class="t">视图</div>
+            <div class="views">
+              <button data-view="3d" class="on">3D 鸟瞰</button>
+              <button data-view="2d">2D 总平面</button>
+            </div>
+          </div>
+          <div class="grp">
+            <div class="t">操作</div>
+            <div class="views">
+              <button id="regen">重新生成</button>
+              <button id="reset">复位视角</button>
+            </div>
+          </div>
+        </div>
+        <div id="stats"></div>
+      </aside>
+      <main id="stage">
+        <div id="three"></div>
+        <div id="svg"></div>
+        <div id="hud"></div>
+        <div id="busy">生成中…</div>
+        <div id="err"></div>
+      </main>
+    </div>
+    <script>
+      // 模块脚本的**加载期**报错（import 阶段）用模块内部的 try/catch 抓不到，
+      // 只能在它之前挂一个全局监听，把错误直接写到页面上 —— 否则出问题时
+      // 用户看到的就是一片黑，连"哪里错了"都没有。
+      window.__labBooted = false;
+      function showFatal(msg) {
+        var el = document.getElementById('err');
+        if (el) {
+          el.style.display = 'block';
+          // 追加而不是覆盖：先到的错误才是根因，后来的超时提示不能把它盖掉
+          el.textContent = el.textContent ? el.textContent + '\n\n' + msg : msg;
+        }
+      }
+      window.addEventListener('error', function (e) {
+        showFatal('脚本错误：' + (e.message || e.error || '未知') + (e.filename ? '\n' + e.filename + ':' + e.lineno : ''));
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        showFatal('未捕获的 Promise 错误：' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+      });
+      setTimeout(function () {
+        var el = document.getElementById('err');
+        if (!window.__labBooted && el && !el.textContent) {
+          showFatal('脚本没有启动（20 s 内未完成初始化）。通常是模块加载失败或 WebGL 不可用，请看控制台。');
+        }
+      }, 20000);
+    </script>
+    <script type="module" src="/src/ui/compose-lab.ts"></script>
+  </body>
+</html>

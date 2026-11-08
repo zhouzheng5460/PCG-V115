@@ -13,7 +13,7 @@
 import { Pt } from '../../../core/geom';
 import { surface, surfaceArea, surfaceInset, surfaceIntersect, surfaceSubtract, type PlanSurface } from '../core/surface';
 import { solveParking, CAR_STALL, type ParkLayout } from '../../parking';
-import { bufferPolyline } from '../../parking/placemaker';
+import { bufferPolyline } from '../../../core/polyline';
 import { obbOf } from '../subdivision/geom';
 import { U } from '../subdivision/types';
 import type { ComposeNote, GroundPatch, InternalRoad, ParcelPlan, ParkingArea, SiteBuilding, SiteDoor } from './types';

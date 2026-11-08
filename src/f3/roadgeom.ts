@@ -1,0 +1,1213 @@
+// F3-B6 · 道路几何：一张完整路网面 → 街区 → 车行 / 路缘 / 人行 / 绿带 / 标线
+//
+// 唯一真值源是 `domain`（= `reserve`）：一张**已经带完整路口和圆角**的闭合
+// 道路用地面。地块 = 场地 − 这张面；所有侧带是这张面按四级断面宽度
+// （车行 / +路缘 / +人行 / +绿带）生成的同心闭合面两两求差。
+//
+// 不再有「逐路 sideBand 拼条带 → 同层 dedupe → 跨层相减 → 角上再补贴片」：
+// 那套做法里每一层的边界都是自己算出来的，跟街区的闭合形状并不相等，
+// 于是路口黑缝、绿十字、铺装堵路都是必然结果。现在每一层都读同一张面。
+
+import { Pt } from '../core/geom';
+import { bufferPolyline } from '../core/polyline';
+import {
+  bboxOf,
+  distToSurfaceEdge,
+  ringArea,
+  selfIntersects,
+  surfaceArea,
+  surfaceIntersect,
+  surfaceOffset,
+  surfaceSubtract,
+  surfaceUnion,
+  type PlanSurface,
+} from '../town/planning/core/surface';
+import {
+  M2,
+  U,
+  cleanRing,
+  rectRing,
+  sampleAlong,
+  shapeOf,
+} from './geom';
+import { filletConcave, filletConvex, removeHairpins, roundDomainAll, simplifyPolyline } from './rounding';
+import type { PathGraph, RoadClass3, RoadPath, RoadSection, StylePreset } from './types';
+
+import { buildJunctionManeuvers } from './lanes';
+import {
+  buildMarkings,
+  MIN_CROSSING_GAP_M,
+  MIN_CROSSING_WIDTH_M,
+  type MarkKind,
+  type MarkSeg,
+} from './markings';
+
+export type { MarkKind, MarkSeg };
+/** 过街设施门槛与最小间距：实现在 markings.ts，这里重导出给测试与 UI 用 */
+export { MIN_CROSSING_GAP_M, MIN_CROSSING_WIDTH_M };
+
+export interface RoadGeom {
+  carriage: PlanSurface[];
+  junction: PlanSurface[];
+  /** 兼容字段：圆角已属于 domain 自身，不再有独立的转角铺装层 */
+  corner: PlanSurface[];
+  curb: PlanSurface[];
+  sidewalk: PlanSurface[];
+  verge: PlanSurface[];
+  /**
+   * 路口行人平台 = 让开区里的人行道 + domain 上尚未归属的部分（圆角片、
+   * 绿带收头空出的角）。它与人行道同材质、相邻不重叠，全部由 domain 派生。
+   */
+  apron: PlanSurface[];
+  markings: MarkSeg[];
+  /**
+   * 车道级路口转向（maneuver graph）的统计。
+   *
+   * 目前只做"规模 + 完备性"的披露：每个 3 臂以上路口的每条进口车道
+   * 都至少有一条通往出口的连接。真正的用途在后续（渠化 / 仿真），
+   * 但数据得先建起来，否则箭头永远是"猜方向"。
+   */
+  maneuvers: { junctions: number; arms: number; links: number };
+  /** 实际设了斑马线的路口中心（验收断言用） */
+  crossings: Pt[];
+  /** 唯一真值源：完整、已圆角的道路用地面（含全部路口） */
+  domain: PlanSurface[];
+  /** 同 domain：扣街区用 */
+  reserve: PlanSurface[];
+  roadAreaM2: number;
+  /** 道路用地净面积：面积对账用这个口径，不用图层求和 */
+  reserveAreaM2: number;
+  /** 兼容字段：恒为 0（圆角已并入 reserve） */
+  cornerAreaM2: number;
+  junctionAreaM2: number;
+  walkAreaM2: number;
+  vergeAreaM2: number;
+  lengthM: number;
+  /** 实际生效的断面（按场地窄边收放之后）：路灯、入口、退线都读它 */
+  sections: Record<RoadClass3, RoadSection>;
+  notes: string[];
+}
+
+/**
+ * 单一真值源：**一张完整的、已圆角的道路用地面**。
+ *
+ * 用户口径：地块是路网闭合面扣出来的范围，所以路网模型本身就得包含
+ * 完整的路口和圆角；人行道、沿街绿带必须与这张闭合面同源，不能各自
+ * 用矩形/条带拼完再 dedupe、跨层相减。
+ *
+ * 做法（四步，全程只有「闭合面」和「布尔差」，没有逐路条带）：
+ *   ① 每条街按同一份断面生成 4 个**全宽缓冲**：车行 / +路缘 / +人行 / +绿带；
+ *      路口让开区（每条分支一个矩形，按标线同一份 reach 收头）也在每一层里。
+ *   ② 每层各并成一张闭合面 B0 ⊂ B1 ⊂ B2 ⊂ B3（宽度逐层递增，天然单调）。
+ *   ③ B3 做**凹角/洞凸角圆弧化** → R。R 自带完整路口 + 圆角，是唯一的路网面。
+ *   ④ 街区 = 场地 − R；curb = B1−B0，walk = B2−B1，verge = (B3−B2)−路口让开区，
+ *      剩下的（圆角片 + 绿带收头空出的角）由 apron 一次补满。
+ *   于是 R = 车行 ∪ 路缘 ∪ 人行 ∪ 绿带 ∪ 平台，两两不交、没有数值缝，
+ *   而且绿带的外边界就是 R 的边界，街区的边界也是 R 的边界。
+ */
+export function buildRoadGeom(
+  spec: { boundary: PlanSurface },
+  graph: PathGraph,
+  preset: StylePreset
+): RoadGeom {
+  const notes: string[] = [];
+  const T0 = Date.now();
+  const tick = (tag: string): void => {
+    if (typeof process !== 'undefined' && process.env?.F3_TC) console.log(`[rg] ${tag} ${Date.now() - T0} ms`);
+  };
+
+  /** 断面按场地窄边收放（窄工业带不能被一条主干吃光） */
+  const minorM = shapeOf(spec.boundary).minorM || 200;
+  const capM = Math.max(9, minorM / 2.2);
+  const shrunk: string[] = [];
+  const secOf = (cls: RoadPath['cls']): RoadSection => {
+    const sec = preset.section[cls];
+    const total = sec.carriage + 2 * (sec.curb + sec.walk + sec.green);
+    if (total <= capM) return sec;
+    const k = capM / total;
+    if (!shrunk.includes(cls)) shrunk.push(cls);
+    return { carriage: sec.carriage * k, curb: sec.curb * k, walk: sec.walk * k, green: sec.green * k };
+  };
+  if (shrunk.length) notes.push(`断面按场地窄边 ${minorM.toFixed(0)} m 收放（上限 ${capM.toFixed(1)} m）：${shrunk.join(', ')}`);
+  const widthOf = (cls: RoadPath['cls']): number => U(secOf(cls).carriage / 2);
+  for (const e of graph.edges.values()) e.widthU = U(secOf(e.cls).carriage);
+  for (const p of graph.paths) p.widthU = U(secOf(p.cls).carriage);
+
+  /** 断面四级累计侧带宽（世界单位）：0 / 路缘 / 路缘+人行 / 全断面 */
+  /**
+   * 路缘石转弯半径**按道路等级取**（《城市道路交叉口规划规范》GB 50647 的口径：
+   * 主干 15~20 m / 次干 10~15 m / 支路 6~9 m）。
+   *
+   * 取上界：主干 18 / 次干 13 / 支路 8。之前四层共用一个 6 m，17 m 宽的干道
+   * 拐弯处只有 6 m 弧，大型车根本过不去，视觉上也像把四个角捏在一起。
+   * three-roads 里这是 `minimumRadius` 的角色 —— 它按设计速度校验；这里退化成
+   * 按断面宽度分档，但"等级越高、转角越大"的结论一致。
+   */
+  const cornerRFor = (half: number): number => (half >= U(7.5) ? 18 : half >= U(5) ? 13 : 8);
+
+  const sideW = (cls: RoadPath['cls']): [number, number, number, number] => {
+    const s = secOf(cls);
+    return [0, U(s.curb), U(s.curb + s.walk), U(s.curb + s.walk + s.green)];
+  };
+
+  const site = spec.boundary;
+  let lengthM = 0;
+  for (const p of graph.paths) lengthM += polyLenM(p.pts);
+
+  // ---------------- ① 路口入射方向（标线与让开区共用同一份）
+  interface Approach {
+    dir: Pt;
+    ang: number;
+    half: number;
+    outer: number;
+    cls: RoadPath['cls'];
+    edgeId: string;
+    reach: number;
+  }
+  const jApp = new Map<string, Approach[]>();
+  for (const nid of graph.junctions) {
+    const node = graph.nodes.get(nid);
+    if (!node) continue;
+    const list: Approach[] = [];
+    for (const eid of new Set(node.edges)) {
+      const e = graph.edges.get(eid);
+      if (!e) continue;
+      const dir = dirAtNode(e.pts, node.at);
+      list.push({
+        dir,
+        ang: Math.atan2(dir.y, dir.x),
+        half: widthOf(e.cls),
+        outer: widthOf(e.cls) + sideW(e.cls)[3],
+        cls: e.cls,
+        edgeId: eid,
+        reach: 0,
+      });
+    }
+    if (list.length < 3) continue;
+    list.sort((a, b) => a.ang - b.ang);
+    const maxHalf = Math.max(...list.map((a) => a.half));
+    for (let i = 0; i < list.length; i++) {
+      let r = list[i].half * 0.9;
+      for (let j = 0; j < list.length; j++) {
+        if (j === i) continue;
+        const s = Math.abs(Math.sin(list[j].ang - list[i].ang));
+        r = Math.max(r, list[j].half / Math.max(0.32, s));
+      }
+      list[i].reach = Math.min(r, maxHalf * 1.9);
+    }
+    jApp.set(nid, list);
+  }
+  tick('apps');
+
+  /** 圆盘：40 边足够，边界看起来就是圆弧 */
+  const diskOf = (at: Pt, r: number, segs = 40): PlanSurface => {
+    const ring: Pt[] = [];
+    for (let i = 0; i < segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      ring.push(new Pt(at.x + Math.cos(a) * r, at.y + Math.sin(a) * r));
+    }
+    return { outer: ring, holes: [] };
+  };
+
+  /** 单臂横断矩形：从节点往外 L，半宽 h，端头垂直于该臂 */
+  const armRect = (at: Pt, A: Approach, L: number, h: number): PlanSurface => {
+    const nx = -A.dir.y;
+    const ny = A.dir.x;
+    const back = U(0.6);
+    return {
+      outer: cleanRing([
+        new Pt(at.x - A.dir.x * back + nx * h, at.y - A.dir.y * back + ny * h),
+        new Pt(at.x + A.dir.x * L + nx * h, at.y + A.dir.y * L + ny * h),
+        new Pt(at.x + A.dir.x * L - nx * h, at.y + A.dir.y * L - ny * h),
+        new Pt(at.x - A.dir.x * back - nx * h, at.y - A.dir.y * back - ny * h),
+      ]),
+      holes: [],
+    };
+  };
+
+  /**
+   * 一个路口的**星形让开区**（单一片）：每条臂一段横断收头线，转角处用
+   * 一段**与两侧边线相切的圆弧**接起来。
+   *
+   * 三代实现的教训（改之前先读）：
+   *   ① 每条臂一个矩形再并集 —— 矩形互相穿插，边界到处是 90°/锐角锯齿，
+   *      切出来的臂端是斜嘴、路口中央长星形毛刺（用户红圈）。
+   *   ② 各臂横断面的端点直接连直线（"星形多边形"）—— 边界没有锯齿了，但
+   *      转角变成一个**直斜切**（正十字是 √2·(L−h) 长的一条斜边）。半径
+   *      18 m 的路缘根本放不下（最多 0.44×边长），于是每个路口都是个八边形，
+   *      用户红笔画的那条弧对不上。
+   *   ③ 现在：横断线 → 沿边线走到切点 → 圆弧 → 另一条边线 → 下一个横断线。
+   *      圆心 P 是两条边线的交点（"角点"），半径取该路口的路缘半径，
+   *      圆弧向 P 内凹 —— 这正是街角铺装的形状。臂长必须够长（≥ 投影 + 切距），
+   *      否则圆弧会被横断线切断，所以臂长在调用方按 `t = r·tan(φ/2)` 预留。
+   */
+  const starZone = (
+    at: Pt,
+    apps: Approach[],
+    cuts: number[],
+    half: (a: Approach, i: number) => number,
+    cornerRadius: number,
+    arcs?: Pt[][]
+  ): PlanSurface | null => {
+    if (apps.length < 3) return null;
+    const n = apps.length;
+    const order = apps.map((_a, i) => i).sort((i, j) => apps[i].ang - apps[j].ang);
+    const ring: Pt[] = [];
+    for (let k = 0; k < n; k++) {
+      const i = order[k];
+      const j = order[(k + 1) % n];
+      const A = apps[i];
+      const B = apps[j];
+      const hA = half(A, i);
+      const hB = half(B, j);
+      const nA = new Pt(-A.dir.y, A.dir.x);
+      const nB = new Pt(-B.dir.y, B.dir.x);
+      const L = Math.max(cuts[i], A.half * 0.4);
+      // 先右后左 → 与 ang 递增同向，环为 CCW
+      ring.push(new Pt(at.x + A.dir.x * L - nA.x * hA, at.y + A.dir.y * L - nA.y * hA));
+      ring.push(new Pt(at.x + A.dir.x * L + nA.x * hA, at.y + A.dir.y * L + nA.y * hA));
+
+      // ---- 转角：A 的左边线 × B 的右边线，交于 P，用半径 r 的圆弧接起来
+      const cosPhi = Math.max(-1, Math.min(1, A.dir.x * B.dir.x + A.dir.y * B.dir.y));
+      const phi = Math.acos(cosPhi);
+      if (phi > Math.PI - 0.14 || phi < 0.2) continue; // 几乎共线：这里没有转角
+      const pA = new Pt(at.x + nA.x * hA, at.y + nA.y * hA);
+      const pB = new Pt(at.x - nB.x * hB, at.y - nB.y * hB);
+      const P = lineIntersect(pA, A.dir, pB, B.dir);
+      if (!P || Pt.distance(P, at) > U(60)) continue;
+      /**
+       * 圆弧半径按**实际可用的切距**降级：切点必须落在两条臂的收头线之内。
+       * 放不下时圆弧变小（仍然相切、仍然是圆弧），而不是退回直斜接 ——
+       * 直斜接就是用户红笔画的那条"斜切的八边形边"。
+       */
+      const tanH = Math.tan(phi / 2);
+      const tFit = Math.min(cuts[i], cuts[j]) - Pt.distance(P, at) - U(0.3);
+      if (tFit <= U(0.8)) continue;
+      const t = Math.min(cornerRadius * tanH, tFit);
+      const rr = t / tanH;
+      if (!(rr > U(0.8))) continue;
+      const T1 = new Pt(P.x + A.dir.x * t, P.y + A.dir.y * t);
+      const T2 = new Pt(P.x + B.dir.x * t, P.y + B.dir.y * t);
+      const bx = A.dir.x + B.dir.x;
+      const by = A.dir.y + B.dir.y;
+      const bl = Math.hypot(bx, by) || 1;
+      const C = new Pt(P.x + (bx / bl) * (rr / Math.cos(phi / 2)), P.y + (by / bl) * (rr / Math.cos(phi / 2)));
+      if (!Number.isFinite(C.x) || !Number.isFinite(C.y)) continue;
+      const a1 = Math.atan2(T1.y - C.y, T1.x - C.x);
+      const a2 = Math.atan2(T2.y - C.y, T2.x - C.x);
+      let delta = a2 - a1;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      ring.push(new Pt(T1.x, T1.y));
+      const segs = 10;
+      const o = rr + U(0.42);
+      const arcPts: Pt[] = [];
+      for (let s = 0; s <= segs; s++) {
+        const a = a1 + (delta * s) / segs;
+        const q = new Pt(C.x + Math.cos(a) * rr, C.y + Math.sin(a) * rr);
+        if (s > 0 && s < segs) ring.push(q);
+        arcPts.push(new Pt(C.x + Math.cos(a) * o, C.y + Math.sin(a) * o));
+      }
+      if (arcs) arcs.push(arcPts);
+    }
+    const r = ringArea(ring) < 0 ? ring.slice().reverse() : ring;
+    const out = cleanRing(r);
+    if (out.length < 6 || selfIntersects(out)) return null;
+    return { outer: out, holes: [] };
+  };
+
+  /** 第 k 层路口让开区（长度取标线同一份 reach，宽度按层递增） */
+  const zones: PlanSurface[][] = [[], [], [], []];
+  /**
+   * 每条进口的「路口面收头距离」：`${nodeId}|${edgeId}` → 世界单位。
+   *
+   * 标线（人行横道 / 停止线 / 箭头 / 路口边线）必须跟**路口面本身**的边界对齐，
+   * 不能自己再估一个 reach：估小了斑马线压进路口、估大了留一条黑缝。
+   * 这里是唯一真值源，markings 只负责消费。
+   */
+  const faces = new Map<string, number>();
+  /** 各路口转角的圆弧中心线（已向沥青一侧挪 0.42 m），给标线画转角边线用 */
+  const jArcs: Pt[][] = [];
+  /** 绿带禁入区：按《Houdini 路网》任意 N 叉的垂线收头线求，绿带在此收头 */
+  const yieldZones: PlanSurface[] = [];
+  /**
+   * 路口**转角平台**：让开区外扩「街角半径 + 绿带宽 + 2 m」。
+   *
+   * 为什么需要它：绿带是断面最外一圈（B3 − B2），它会绕路口转角连续包过去。
+   * 只看让开区的话，转角那一圈 5 m 宽的弧带会被判成绿带 —— 于是每个路口
+   * 四角都是绿色楔形，而真实道路的绿化在停止线前就收头，转角是整块铺装。
+   * 外扩量 = 街角圆弧半径 + 该路口最宽绿带 + 2 m，刚好盖住转角弧带，
+   * 又不会把半条街的绿带推平。
+   */
+  const cornerZones: PlanSurface[] = [];
+  /** 最外层（街区块角）的圆弧半径，世界单位 */
+  const cornerR = U(6);
+  for (const [nid, apps] of jApp) {
+    const node = graph.nodes.get(nid);
+    if (!node) continue;
+    // 收头距离用第 3 层（全断面）宽度解析，四层共用同一组 → B0⊂B1⊂B2⊂B3 严格同心
+    const a3 = apps.map((A) => ({ ...A, outer: A.half + sideW(A.cls)[3] }));
+    const cuts = junctionCutDistances(a3, node.at);
+    const maxHalf = (k: number): number => Math.max(...apps.map((A) => A.half + sideW(A.cls)[k]));
+    /** 该路口的路缘转弯半径（按最宽臂的等级） */
+    const jR = U(cornerRFor(Math.max(...apps.map((A) => A.half))));
+    /**
+     * 绿带在**每条臂的收头处**垂直切断（真实道路：绿化到停止线前就结束）。
+     *
+     * 端头是垂直于道路的直线 —— 这是"横切断面"的形状，不会斜切。
+     * 但长度要 superset 到相邻转角：只切到 `cuts[i]` 时，臂端与转角之间会
+     * 留一小截绿带（图上是一个绿色小钩），因为转角在 edge 交点处、比收头更远。
+     */
+    let beltW = 0;
+    for (const A of apps) beltW = Math.max(beltW, sideW(A.cls)[3] - sideW(A.cls)[2]);
+
+    const armLen = apps.map((_A, i) => cuts[i]);
+    const cornerPts: Pt[] = [];
+    /** 最外侧的侧带宽度：圆弧半径在该层最大，臂长要按它预留 */
+    let side3 = 0;
+    for (const A of apps) side3 = Math.max(side3, sideW(A.cls)[3]);
+    for (let i = 0; i < apps.length; i++) {
+      const A = apps[i];
+      const B = apps[(i + 1) % apps.length];
+      const nA = new Pt(-A.dir.y, A.dir.x);
+      const nB = new Pt(B.dir.y, -B.dir.x);
+      const pA = new Pt(
+        node.at.x + nA.x * (A.half + sideW(A.cls)[3]),
+        node.at.y + nA.y * (A.half + sideW(A.cls)[3])
+      );
+      const pB = new Pt(
+        node.at.x + nB.x * (B.half + sideW(B.cls)[3]),
+        node.at.y + nB.y * (B.half + sideW(B.cls)[3])
+      );
+      const P = lineIntersect(pA, A.dir, pB, B.dir);
+      // 交点飞太远（两臂几乎共线）说明那里没有真正的转角，不做处理
+      if (!P || Pt.distance(P, node.at) > U(46)) continue;
+      cornerPts.push(P);
+      const vx = P.x - node.at.x;
+      const vy = P.y - node.at.y;
+      const projA = vx * A.dir.x + vy * A.dir.y;
+      const projB = vx * B.dir.x + vy * B.dir.y;
+      /**
+       * 臂长要留出**圆弧切距** t = r·tan(φ/2)：转角圆弧切在边线上、离角点 P
+       * 还有 t 米，收头线必须比那个切点更远，否则圆弧会被横断线削掉
+       * （那就退回上一版的"直斜切八边形"）。
+       *
+       * 上限 8 m：不留上限时，锐角/钝角路口的 t 能到 30 m 以上，路口被撑成
+       * 一个 60~70 m 见方的广场，而且停止线被推到 30 m 外、路口内一大段
+       * 车行道没有任何标线。放不下的大半径由 `starZone` 按实际可用的切距
+       * **降级**，圆弧仍然存在，只是小一点。
+       */
+      const phi = Math.acos(Math.max(-1, Math.min(1, A.dir.x * B.dir.x + A.dir.y * B.dir.y)));
+      const tanHalf = Math.abs(phi - Math.PI) > 0.14 ? Math.abs(Math.tan(phi / 2)) : 0;
+      const tOut = Math.min(U(8), (jR + side3) * tanHalf);
+      armLen[i] = Math.max(armLen[i], projA + tOut + U(0.8));
+      armLen[(i + 1) % apps.length] = Math.max(armLen[(i + 1) % apps.length], projB + tOut + U(0.8));
+    }
+    /**
+     * 绿带禁区 = 一个**星形多边形**（各臂横断线 + 相邻臂之间的直连边）。
+     *
+     * 这里试过三种形状，只有星形是对的：
+     *   · 单臂横断矩形并集 —— 矩形互相穿插，边界全是 90°/锐角锯齿；
+     *   · 一条臂一个矩形 + 转角小圆 —— 直边与圆弧相交处出现尖角（"尖嘴"）；
+     *   · 以路口为心的大圆 —— 锐角路口半径 40 m，把沿街绿化整段铲平。
+     * 星形的边界只有两种边：垂直于道路的横断线（绿带端头）和两臂之间的
+     * 直连边（转角，那一段本来就不该有绿化），于是绿带端头永远是干净的直线。
+     *
+     * 臂长取「收头距离」与「到相邻转角的投影 + 2.5 m」的较大者：转角在
+     * 边缘线交点处，比收头更远，不延伸过去就会在臂端留一小截绿带（绿色小钩）。
+     */
+    /**
+     * 各层路口让开区 = **同一个星形**，只是半宽按层递增。
+     *
+     * 之前这里是「以节点为心、半径 = 该层最宽臂半宽」的圆盘：一条 17 m 主干
+     * 与 12 m 支路相交时，圆盘按 8.5 m 画，在支路方向鼓出 2.5 m 的圆头，
+     * 路缘/人行道/绿带全跟着鼓包 —— 转角那块"伸出路面的米色舌头"。
+     * 星形每条臂的半宽就是该臂自己的宽度，端头平齐，不会鼓。
+     */
+    for (let k = 0; k < 4; k++) {
+      const w = (A: Approach): number => A.half + sideW(A.cls)[k];
+      const maxSide = Math.max(...apps.map((A) => sideW(A.cls)[k]));
+      // 四层同心：圆心不动，半径 = 路缘半径 + 该层累计侧带宽
+      const z = starZone(node.at, apps, armLen, w, jR + maxSide, k === 0 ? jArcs : undefined);
+      zones[k].push(z ?? diskOf(node.at, Math.max(...apps.map(w))));
+    }
+
+    // 标线要用的收头距离 = 让开区在各臂上的实际臂长（第 0 层就是车行面）
+    for (let i = 0; i < apps.length; i++) faces.set(`${nid}|${apps[i].edgeId}`, armLen[i]);
+
+    const z3 = starZone(node.at, apps, armLen, (A) => A.half + sideW(A.cls)[3], jR + side3);
+    if (z3) {
+      yieldZones.push(z3);
+    } else {
+      for (let i = 0; i < apps.length; i++) {
+        yieldZones.push(armRect(node.at, apps[i], Math.min(armLen[i], U(18)), apps[i].half + sideW(apps[i].cls)[3]));
+      }
+    }
+
+    /**
+     * 转角区 = 每个转角一个以「两臂边缘线交点」为心的小圆。
+     *
+     * 圆心落在角上，不在路口中心：以路口为心会把两侧沿街绿化整段铲平，
+     * 铺装被补成一条沿街长带（用户红圈里那块"舌头"）。
+     * 半径 = 街角圆弧 + 绿带宽 + 3 m：刚好盖住转角那圈绿带，沿街绿化不动。
+     */
+    for (const P of cornerPts) cornerZones.push(diskOf(P, jR + U(beltW + 5)));
+  }
+
+  /** 尽端回车场：也是路网面的一部分，四层都要带着它 */
+  for (const n of graph.nodes.values()) {
+    if (n.degree !== 1 || n.onBoundary) continue;
+    const e = graph.edges.get(n.edges[0]);
+    if (!e) continue;
+    const half = widthOf(e.cls);
+    const seg = sampleAlong(e.pts, U(1)).slice(0, 2);
+    const dir = seg.length >= 2 ? new Pt(seg[0].at.x - seg[1].at.x, seg[0].at.y - seg[1].at.y) : new Pt(1, 0);
+    const L = Math.hypot(dir.x, dir.y) || 1;
+    const c = new Pt(n.at.x - (dir.x / L) * half * 0.6, n.at.y - (dir.y / L) * half * 0.6);
+    const ring: Pt[] = [];
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      ring.push(new Pt(c.x + Math.cos(a) * half * 1.05, c.y + Math.sin(a) * half * 1.05));
+    }
+    for (let k = 0; k < 4; k++) zones[k].push({ outer: ring, holes: [] });
+  }
+  tick('zones');
+
+  /** 批量裁回红线（一次求交，失败再逐片） */
+  const clipBatch = (list: PlanSurface[]): PlanSurface[] => {
+    if (list.length === 0) return [];
+    try {
+      const q = surfaceIntersect(list, [site]);
+      if (q.length) return q.map(dropPins).filter((s) => M2(surfaceArea(s)) > 0.6);
+    } catch {
+      /* 逐片兜底 */
+    }
+    return clipToSite(list, site);
+  };
+
+  // ---------------- ② 四层闭合面 B0 ⊂ B1 ⊂ B2 ⊂ B3
+  /**
+   * 端点压在红线上的路，缓冲前**往外多伸半个断面**。
+   *
+   * 断面缓冲是平头收口：中心线端点正好落在红线上时，带的端面就是红线本身，
+   * 于是「场地 − 路网面」在带的两端只剩下两个**角点相接**的残块 ——
+   * polygon-clipping 会把它并成一个环（35 顶点、0 个洞），街区数从 2 掉到 1，
+   * 那一块又因为太大而切不出地块、最后 0 栋建筑（实测 R01 样板）。
+   * 多伸半个断面之后，带一定跨过红线，街区被干净地切开；多出来的部分被
+   * `clipBatch` 裁回场地，不会让路面越界。
+   */
+  const outward = (pts: Pt[], half: number): Pt[] => {
+    const out = pts.map((p) => new Pt(p.x, p.y));
+    if (out.length < 2) return out;
+    const dirAt = (a: Pt, b: Pt): Pt => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const L = Math.hypot(dx, dy) || 1;
+      return new Pt(dx / L, dy / L);
+    };
+    const ext = half + U(0.4);
+    const head = out[0];
+    if (distToSurfaceEdge(head, site) < U(0.5)) {
+      const d = dirAt(out[1], out[0]);
+      out.unshift(new Pt(head.x + d.x * ext, head.y + d.y * ext));
+    }
+    const tail = out[out.length - 1];
+    if (distToSurfaceEdge(tail, site) < U(0.5)) {
+      const d = dirAt(out[out.length - 2], tail);
+      out.push(new Pt(tail.x + d.x * ext, tail.y + d.y * ext));
+    }
+    return out;
+  };
+  const band: PlanSurface[][] = [[], [], [], []];
+  for (const p of graph.paths) {
+    const w = sideW(p.cls);
+    // 四层必须用**同一份**折线：逐米采样的中心线会在缓冲环上留下 3 cm 级的
+    // 微边，街角放不下圆弧；简化只消化离散化折点（15 cm），四层仍严格同心。
+    const pts = outward(simplifyPolyline(p.pts, U(0.15)), widthOf(p.cls) + w[3]);
+    for (let k = 0; k < 4; k++) {
+      const buf = bufferPolyline(pts, widthOf(p.cls) + w[k]);
+      if (!buf) continue;
+      const ring = cleanRing(buf);
+      if (ring.length >= 3) band[k].push({ outer: ring, holes: [] });
+    }
+  }
+  const Braw: PlanSurface[][] = [];
+  for (let k = 0; k < 4; k++) Braw.push(clipBatch(unionPolys([...band[k], ...zones[k]])));
+  tick('bands');
+  for (let k = 0; k < 4; k++) {
+    if (Braw[k].length === 0) notes.push(`第 ${k} 层道路面为空 —— 该层没有可生成的侧带（不静默当成功）`);
+  }
+
+  // ---------------- ③ 四级断面共用同一组同心圆弧
+  /**
+   * 圆角必须**贯穿整个断面**，不能只长在最外圈。
+   *
+   * 上一版只对 B3（含绿带的用地边界）圆角化：街区块 / 绿带的外角是圆的，
+   * 但 B0/B1/B2 仍是直角缓冲并集，于是「灰色沥青 ↔ 米色铺装」那条路缘线
+   * 在路口拐成直角，平台还被矩形让开区补出一块直角楔形（用户标红的那一块）。
+   *
+   * 同心条件：设最外层街角圆弧半径 r3、圆心 C；第 k 层的角点比最外层内缩
+   * (w3 − wk)，要让圆心仍是 C，半径必须是 r_k = r3 + (w3 − wk)。
+   * 于是车行面圆角最大、街区块角圆角最小，中间正好夹着等宽的路缘 / 人行 /
+   * 绿带环带 —— 这才是「路网面自带完整路口和圆角」。
+   */
+  /** 每个节点按最宽入射边取四级累计侧带宽，供角点按位置查半径 */
+  /**
+   * 路缘石转弯半径**按道路等级取**（《城市道路交叉口规划规范》GB 50647 的口径）：
+   * 主干 12 m / 次干 9 m / 支路 6 m。
+   *
+   * 之前四层共用一个 6 m，主干路口看起来"咬得太紧"：17 m 宽的干道拐弯处
+   * 只有 6 m 弧，大型车根本过不去，视觉上也像把四个角捏在一起。
+   * three-roads 里这是 `minimumRadius` 的角色 —— 它按车道设计速度校验，
+   * 我们这里退化成按断面宽度分档，但"等级越高、转角越大"的结论一致。
+   */
+  const nodeW = [...graph.nodes.values()].map((n) => {
+    let w: [number, number, number, number] = [0, 0, 0, 0];
+    let half = 0;
+    for (const eid of n.edges) {
+      const e = graph.edges.get(eid);
+      if (!e) continue;
+      const cw = sideW(e.cls);
+      if (cw[3] > w[3]) w = cw;
+      half = Math.max(half, widthOf(e.cls));
+    }
+    return { at: n.at, w, r: cornerRFor(half) };
+  });
+  /** 该位置的路缘转弯半径（米 → 世界单位），按最近路口取 */
+  const cornerRAt = (v: Pt): number => {
+    let best = Infinity;
+    let r = 6;
+    for (const n of nodeW) {
+      const dx = n.at.x - v.x;
+      const dy = n.at.y - v.y;
+      const d = dx * dx + dy * dy;
+      if (d < best) {
+        best = d;
+        r = n.r;
+      }
+    }
+    return U(r);
+  };
+  const localW = (v: Pt): [number, number, number, number] => {
+    let best = Infinity;
+    let w = nodeW.length ? nodeW[0].w : ([0, 0, 0, 0] as [number, number, number, number]);
+    for (const n of nodeW) {
+      const dx = n.at.x - v.x;
+      const dy = n.at.y - v.y;
+      const d = dx * dx + dy * dy;
+      if (d < best) {
+        best = d;
+        w = n.w;
+      }
+    }
+    return w;
+  };
+  /**
+   * 第 k 层的圆角半径 = **路缘石转弯半径 + 该层累计侧带宽**。
+   *
+   * 关键是 `cornerRAt` 现在定义成**路缘石（沥青 ↔ 铺装那条线）的半径**，
+   * 不是"最外圈的半径"：
+   *   车行面 B0 = r0            ← 用户在图里画黄线的就是这条
+   *   路缘 B1   = r0 + 路缘宽
+   *   人行 B2   = r0 + 路缘 + 人行
+   *   用地 R    = r0 + 全断面侧带宽
+   * 四条弧同心、间距等于各自的侧带宽，所以转角铺装等宽。
+   *
+   * 之前写成 `r0 − (w3 − w[k])`：车行面半径只有 `12 − 5.6 = 6.4 m`，
+   * 主干路口的转弯弧看着还是个"小圆角"，大型车根本过不去 —— 用户标出来的
+   * 那条大弧就是要求把"路缘半径"本身做大。
+   */
+  const radiusFor = (k: number) => (v: Pt): number => {
+    const w = localW(v);
+    return Math.max(U(0.6), cornerRAt(v) + w[k]);
+  };
+  /** 最外层的圆角半径 = 路缘半径 + 全断面侧带宽（per-point，跟着最近路口走） */
+  const outerRAt = (v: Pt): number => Math.max(U(0.6), cornerRAt(v) + localW(v)[3]);
+  const R0 = clipBatch(roundDomainAll(Braw[3], outerRAt));
+  tick('round');
+
+  /**
+   * 四层全部圆角化；最外层就是 R 本身。
+   *
+   * 这里**不再**把 B[k] 与 R 求交：四层与 R 的边界本来就是同一族折线简化出来的，
+   * 自己跟自己求交是 polygon-clipping 最容易报 "degenerate segment" 的病态输入
+   * （实测 636 次静默失败，失败时兜底保留原片反而制造了层间重叠）。
+   *
+   * 不同等级相交 / 锐角路口会让半径补偿差几米，内层圆角片偶尔探出外层；
+   * 因此逐层做一次**累积并集**强制 B0 ⊂ B1 ⊂ B2，而不是靠事后相减。
+   * R 仍是纯圆角化的最外层，不把内层并进来 —— 并进来会让
+   * `R − 已分配层` 变成病态布尔（实测铺装暴涨 4 万 m² 并压回车行面）。
+   * 内层探出的那几片由下面的「派生层显式排除车行面」兜住。
+   */
+  const R = R0;
+  const B: PlanSurface[][] = [];
+  for (let k = 0; k < 3; k++) B.push(clipBatch(roundDomainAll(Braw[k], radiusFor(k))));
+  for (let k = 1; k < 3; k++) B[k] = unionPolys([...B[k], ...B[k - 1]]);
+  B.push(R);
+  tick('layers-round');
+
+  // ---------------- ④ 所有层由 R / B 差集派生
+  /**
+   * 输出前统一**洗环**：去零长边 + 统一绕向（外环 CCW、洞环 CW）。
+   *
+   * 布尔与偏移的结果里会留 0.1 mm 量级的重复点（实测 junction 13/57 片、
+   * curb 40/99 片带零长边）。这些退化边进三角化会生成 NaN 法线，
+   * 3D 里就表现成路口中间一团**放射状黑块/星形**（用户截图红圈）。
+   * 绕向不一致同样会让一部分三角形背面朝上，渲染出来发黑。
+   */
+  const sanitize = (list: PlanSurface[]): PlanSurface[] => {
+    const out: PlanSurface[] = [];
+    const eps = 6e-5;
+    const dedupe = (ring: Pt[]): Pt[] => {
+      const r: Pt[] = [];
+      for (const q of ring) {
+        const last = r[r.length - 1];
+        if (last && Pt.distance(last, q) < eps) continue;
+        r.push(new Pt(q.x, q.y));
+      }
+      if (r.length > 2 && Pt.distance(r[0], r[r.length - 1]) < eps) r.pop();
+      return r;
+    };
+    const norm = (s0: PlanSurface): PlanSurface | null => {
+      // 先摘发夹（零宽回折），否则三角化一定吐尖刺
+      const outer = dedupe(removeHairpins(dedupe(s0.outer)));
+      if (outer.length < 3) return null;
+      if (ringArea(outer) < 0) outer.reverse();
+      const holes: Pt[][] = [];
+      for (const h of s0.holes) {
+        const d = dedupe(removeHairpins(dedupe(h)));
+        if (d.length < 3) continue;
+        holes.push(ringArea(d) > 0 ? d.slice().reverse() : d);
+      }
+      return { outer, holes };
+    };
+    for (const s0 of list) {
+      const s1 = norm(s0);
+      if (!s1) continue;
+      /**
+       * 自交环必须**这里**修掉：斜接外扩（surfaceOffset）在凹角处会自己穿自己，
+       * 布尔再把它传下去。自交环进三角化就是一团尖刺/星形（用户红圈），
+       * 进读图就是"路口角落被咬掉一块"。
+       * 修法：拿它自己跟自己并一次 —— polygon-clipping 会把自交环规范化成简单环。
+       */
+      const dirty = selfIntersects(s1.outer) || s1.holes.some((h) => selfIntersects(h));
+      if (!dirty) {
+        out.push(s1);
+        continue;
+      }
+      try {
+        const healed = surfaceUnion([s1]);
+        for (const q of healed) {
+          const n = norm(q);
+          if (n && M2(surfaceArea(n)) > 1) out.push(n);
+        }
+      } catch {
+        /* 修不了就丢掉这一片：宁可少一块铺装，也不要一张破面 */
+      }
+    }
+    return out;
+  };
+
+  const sum = (list: PlanSurface[]): number => list.reduce((a, s) => a + M2(surfaceArea(s)), 0);
+  const diff = (a: PlanSurface[], b: PlanSurface[]): PlanSurface[] => {
+    if (a.length === 0) return [];
+    if (b.length === 0) return a.filter((s) => M2(surfaceArea(s)) > 1);
+    try {
+      return surfaceSubtract(a, b).filter((s) => M2(surfaceArea(s)) > 1);
+    } catch {
+      /**
+       * 整批失败时**逐片**重试，而不是原样返回 `a`。
+       *
+       * polygon-clipping 只要吃到一片自交/退化输入就整批静默失败；原样返回
+       * 意味着"这一层没扣掉"，于是人行道里保留了车行面、平台压回车行道
+       * ——实测宽路口（主干网 17 m 车行 + 转角平台）下会冒出 117 m² 的
+       * apron∩车行、2210 m² 的 walk∩apron。逐片重试把失败限制在真正病态
+       * 的那一片上。
+       */
+      const out: PlanSurface[] = [];
+      for (const s of a) {
+        try {
+          out.push(...surfaceSubtract([s], b).filter((q) => M2(surfaceArea(q)) > 1));
+        } catch {
+          out.push(s);
+        }
+      }
+      return out;
+    }
+  };
+  /**
+   * B0..B3 已全部圆角化，四层同心包含；派生层只是相邻两层的差，
+   * 路缘 / 人行 / 绿带的内边界因此就是**同一条圆弧**，不再出现
+   * 「外面圆、里面直角」的楔形平台。
+   *
+   * 唯一例外：不同等级相交时内层圆角片会探出外层几米，光靠 `B[k]−B[k−1]`
+   * 会漏出 200 m² 级重叠。所以每一层再显式减一次**完整车行面 B0** ——
+   * 减的是同一份面，不会把平台切成碎块，只是把数值毛刺还给沥青。
+   */
+  /** 派生层统一裁回 R：折线简化让边界收缩几厘米，不裁会有一条细边压进街区。
+   *  只对派生层做，不对 B[k] 做（B[k] 与 R 共线，自求交是病态输入）。 */
+  const cap = (list: PlanSurface[]): PlanSurface[] => {
+    if (list.length === 0) return list;
+    try {
+      const q = surfaceIntersect(list, R).filter((s) => M2(surfaceArea(s)) > 1);
+      if (q.length) return q;
+    } catch {
+      /* 逐片兜底 */
+    }
+    const out: PlanSurface[] = [];
+    for (const s of list) {
+      try {
+        out.push(...surfaceIntersect([s], R).filter((q) => M2(surfaceArea(q)) > 1));
+      } catch {
+        out.push(s);
+      }
+    }
+    return out;
+  };
+  const drive = B[0];
+  /** 路口面直接洗环：标线里的路口边线要从**这一份**派生，才能与最终几何一致 */
+  const junction = sanitize(cap(surfaceIntersect(drive, zones[0]).filter((s) => M2(surfaceArea(s)) > 1)));
+  const carriage = cap(diff(drive, junction));
+  const curb = cap(diff(B[1], drive));
+  const walkAll = cap(diff(B[2], [...B[1], ...drive]));
+  // 绿带在路口按垂线收头，且转角整块让开（绿化不进转角，见 cornerZones）
+  const vergeRawPre = diff(R, B[2]);
+  const verge = diff(vergeRawPre, [...yieldZones, ...cornerZones, ...drive]);
+  /**
+   * 路口转角平台 = 人行环带落在转角区里的那一块。**只用于记账**。
+   */
+  const platform = cap(
+    surfaceIntersect(walkAll, cornerZones).filter((s) => M2(surfaceArea(s)) > 1)
+  );
+
+  /**
+   * 铺装 = **R 内除车行面 / 路缘 / 绿带之外的一切**，一整片。
+   *
+   * 之前拆成「人行道 − 转角平台」「R − 已分配」再分两块铺，结果是：
+   *   · 两块之间的边界由「圆 ∩ 环带」几何决定，全是尖角锯齿；
+   *   · 绿带被切掉的每一个缺口都要单独补一块，补出来的形状是斜切楔形
+   *     （用户三张红圈截图里那些"伸进路面的米色舌头/直角台阶"）。
+   * 地面本来就是一片：转角、绿带缺口、折线简化的残差都只是它的一部分。
+   * 分成一整片之后，可见轮廓只剩三条 —— R 边界（街区侧，6 m 圆弧）、
+   * 车行面边界（路缘线，同心圆弧）、绿带禁区边界（臂端横断线 + 转角直连边），
+   * 全是规整的几何，不再有拼接缝。
+   */
+  /**
+   * 残余 = 绿带环带里落在禁区（路口 / 转角）内的那一块。**只在小片集合上做布尔**。
+   *
+   * 直接写 `R − drive − curb − verge` 语义等价，但那是「一张 28 万 m² 的大面
+   * 减去 200 多片小面」，实测把一座城的生成从 3 s 拖到 37 s；而这里所有项
+   * 都是已经算好的小片，差集瞬间完成。
+   */
+  const vergeRaw = vergeRawPre;
+  const apronRest = diff(vergeRaw, verge);
+  const sidewalk = unionPolys([...walkAll, ...apronRest]);
+  const apron = platform;
+  tick('layers');
+
+  let maneuversStat = { junctions: 0, arms: 0, links: 0 };
+
+  // ---------------- 标线（只认车行面 B0，与路口 reach 同一份）
+  tick('markings-pre');
+  /**
+   * 裁剪用**已拆好的小片**（carriage + junction），不要传 B[0]。
+   *
+   * B[0] 是整张车行面 union 成的**一片 25 万 m² 的大多边形**：bbox 过滤对它
+   * 完全失效，3500 段标线每条都要跟这一整片做一次布尔 —— 实测 31.8 s。
+   * 拆开的片每片只有一条街那么大，bbox 一筛就只剩 1~2 片。
+   */
+  const mk = buildMarkings(graph, B[0], { secOf, jApp, blockers: junction, faces, jArcs });
+  tick('markings');
+  {
+    let arms = 0;
+    let links = 0;
+    for (const apps of jApp.values()) {
+      const mv = buildJunctionManeuvers(apps, secOf);
+      arms += mv.arms.length;
+      links += mv.links.length;
+    }
+    maneuversStat = { junctions: jApp.size, arms, links };
+    notes.push(
+      `路口转向（车道级 maneuver graph）：${jApp.size} 个路口 / ${arms} 个进口 / ${links} 条车道连接` +
+        `（直行 ${links} 中的逐车道连接 + 每个左/右转各 1 条）`
+    );
+  }
+
+  notes.push(
+    `路网面：${graph.paths.length} 条街 / ${jApp.size} 个路口 → 一张已圆角的闭合道路用地 ${sum(R).toFixed(0)} m²（街角圆弧 6 m，车行面按断面宽补偿）；街区 = 场地 − 这张面`
+  );
+  notes.push(
+    `同心断面派生：车行 ${sum(carriage).toFixed(0)} + 路口 ${sum(junction).toFixed(0)} / 路缘 ${sum(curb).toFixed(
+      0
+    )} / 人行 ${sum(sidewalk).toFixed(0)} + 平台 ${sum(apron).toFixed(0)} / 绿带 ${sum(verge).toFixed(0)} m²；标线 ${mk.segs.length} 段`
+  );
+  notes.push(
+    `过街设施：合格路口 ${mk.eligible} → 设斑马线 ${mk.crossings.length} 处（车行道 ≥ ${MIN_CROSSING_WIDTH_M} m、路口中心间距 ≥ ${MIN_CROSSING_GAP_M} m、每处最多正对 2 条）`
+  );
+  {
+    const c = new Map<string, number>();
+    for (const m of mk.segs) c.set(m.kind ?? 'other', (c.get(m.kind ?? 'other') ?? 0) + 1);
+    const fmt = (k: string): string => `${k} ${c.get(k) ?? 0}`;
+    notes.push(
+      `标线（按 GB 5768.3 分级）：${['center', 'lane', 'edge', 'cross', 'stop', 'arrow', 'bus', 'bike', 'slow'].map(fmt).join(' / ')} 段`
+    );
+  }
+
+  return {
+    carriage: sanitize(carriage),
+    junction,
+    /** 圆角已是 R 自身的形状，不再有独立的转角铺装层 */
+    corner: [],
+    curb: sanitize(curb),
+    sidewalk: sanitize(sidewalk),
+    verge: sanitize(verge),
+    apron: sanitize(apron),
+    maneuvers: maneuversStat,
+    markings: mk.segs,
+    crossings: mk.crossings,
+    /** 完整道路用地（含路口与圆角）= 扣街区的唯一依据 */
+    domain: sanitize(R),
+    reserve: sanitize(R),
+    roadAreaM2: sum(carriage),
+    reserveAreaM2: sum(R),
+    cornerAreaM2: 0,
+    junctionAreaM2: sum(junction),
+    walkAreaM2: sum(sidewalk),
+    vergeAreaM2: sum(verge),
+    lengthM,
+    sections: { arterial: secOf('arterial'), collector: secOf('collector'), local: secOf('local') },
+    notes,
+  };
+}
+
+// ---------------------------------------------------------------- 标线
+
+interface ApproachLike {
+  dir: Pt;
+  ang: number;
+  half: number;
+  reach: number;
+  cls: RoadPath['cls'];
+  edgeId: string;
+}
+
+/** 标线兜底：点是否在某个沥青面内（只在断言/调试里用） */
+export function markOnAsphalt(m: MarkSeg, asphalt: PlanSurface[]): boolean {
+  const p = new Pt(
+    m.ring.reduce((a, q) => a + q.x, 0) / m.ring.length,
+    m.ring.reduce((a, q) => a + q.y, 0) / m.ring.length
+  );
+  return asphalt.some((s) => {
+    const bb = bboxOf(s.outer);
+    return p.x >= bb.minX && p.x <= bb.maxX && p.y >= bb.minY && p.y <= bb.maxY;
+  });
+}
+
+// ---------------------------------------------------------------- 工具
+
+function dirAtNode(pts: Pt[], at: Pt): Pt {
+  if (pts.length < 2) return new Pt(1, 0);
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  // 端点离 at 更近 → 从该端指向内部
+  const dA = Pt.distance(first, at);
+  const dB = Pt.distance(last, at);
+  const a = dA <= dB ? pts[0] : pts[pts.length - 1];
+  const b = dA <= dB ? pts[1] : pts[pts.length - 2];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const L = Math.hypot(dx, dy) || 1;
+  return new Pt(dx / L, dy / L);
+}
+
+function polyLenM(pts: Pt[]): number {
+  let s = 0;
+  for (let i = 0; i + 1 < pts.length; i++) s += Pt.distance(pts[i], pts[i + 1]) * 7;
+  return s;
+}
+
+/**
+ * 稳健并集。
+ *
+ * polygon-clipping 在"共享边几乎重合"时会返回两个环（并了个寂寞），
+ * 或直接抛错。这里逐块合并，失败就微偏移重试；再失败就原样留下
+ * （面积会多算一点，但几何不丢）—— 不允许静默变成成功。
+ */
+export function unionPolys(list: PlanSurface[]): PlanSurface[] {
+  const clean = list.filter((s) => s.outer.length >= 3 && Math.abs(surfaceArea(s)) > 1e-9);
+  if (clean.length === 0) return [];
+  /**
+   * 先批量并一次。
+   *
+   * `surfaceUnion` 内部就是"一次布尔并完"，比逐对合并快一到两个数量级
+   * （逐对：每条新区间都要跟累积体求交，多边形越滚越大）。
+   * 只有在批量失败时才退回逐对 —— 逐对的成功率略高，但慢得多。
+   */
+  if (clean.length > 1) {
+    try {
+      const out = surfaceUnion(clean).filter((s) => M2(surfaceArea(s)) > 1);
+      if (out.length > 0) return out;
+    } catch {
+      /* 落到逐对 */
+    }
+  }
+  let acc: PlanSurface[] = [clean[0]];
+  for (let i = 1; i < clean.length; i++) {
+    const b = clean[i];
+    let merged = false;
+    for (let j = 0; j < acc.length; j++) {
+      const u = unionPair(acc[j], b);
+      if (u && u.length === 1) {
+        acc = acc.map((x, k) => (k === j ? u[0] : x));
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) acc.push(b);
+  }
+  return acc.filter((s) => M2(surfaceArea(s)) > 1);
+}
+
+function unionPair(a: PlanSurface, b: PlanSurface): PlanSurface[] | null {
+  try {
+    const u = surfaceUnion([a, b]).filter((q) => M2(surfaceArea(q)) > 0.5);
+    if (u.length === 1) return u;
+  } catch {
+    /* 落到微偏移 */
+  }
+  try {
+    const off = surfaceOffset(a, 0.0008);
+    const u = surfaceUnion([...(off.length ? off : [a]), b]).filter((q) => M2(surfaceArea(q)) > 0.5);
+    if (u.length === 1) return u;
+  } catch {
+    /* 放弃 */
+  }
+  return null;
+}
+
+function diffPolys(a: PlanSurface[], b: PlanSurface[]): PlanSurface[] {
+  const out: PlanSurface[] = [];
+  for (const s of a) {
+    try {
+      for (const q of surfaceSubtract([s], b)) if (M2(surfaceArea(q)) > 0.6) out.push(q);
+    } catch {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+function clipToSite(list: PlanSurface[], site: PlanSurface): PlanSurface[] {
+  const out: PlanSurface[] = [];
+  for (const s of list) {
+    try {
+      for (const q of surfaceIntersect([s], [site])) if (M2(surfaceArea(q)) > 0.6) out.push(dropPins(q));
+    } catch {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+/** 布尔留下的针孔（<20 m² 的"洞"其实是数值毛刺，路面不可能有中庭） */
+function dropPins(s: PlanSurface): PlanSurface {
+  if (s.holes.length === 0) return s;
+  const holes = s.holes.filter((h) => Math.abs(M2(surfaceArea({ outer: h, holes: [] }))) >= 20);
+  return holes.length === s.holes.length ? s : { outer: s.outer, holes };
+}
+
+/** 路口的一条入射分支（世界单位） */
+export interface JunctionApproach {
+  dir: Pt;
+  ang: number;
+  /** 车行半幅 */
+  half: number;
+  /** 道路用地半宽（含路缘 / 人行道 / 绿带） */
+  outer: number;
+  /** 路口面沿这条分支的延伸长度 */
+  reach: number;
+}
+
+/**
+ * 任意 N 叉路口的**人行道收头线**距离 —— 用户补充的《Houdini 路网》分法。
+ *
+ * 以三叉口为例（对任意 N 叉同样成立）：
+ *   图 1：curve1/2/3 交于 P，各自生成的带子 ribbon1/2/3 两两相交得 p1,p2,p3；
+ *   图 2：把每个 p 投到「Y 形骨架」的所有分支上，取最近的分支得 p'；落在
+ *         curve2 上的最近点可能有两个（p1'、p2'），比较弧线 Pp1' / Pp2'，
+ *         **取更长的 p2'** 作为 curve2 分支上人行道的位置；
+ *   图 3：过 p2' 作 curve2 的垂线，就是这条分支的人行道端线。
+ *
+ * 于是每条分支只有一条笔直收头线（垂直于自身中心线），不需要凸包 / 圆角盘 /
+ * 每条路各削两个圆耳朵。返回值 = 沿 `dir` 从节点量出去的距离，与 apps 同序。
+ */
+export function junctionCutDistances(apps: JunctionApproach[], at: Pt, limit = true): number[] {
+  const n = apps.length;
+  const base = apps.map((A) => A.reach * 0.55 + A.outer * 0.22);
+  if (n < 3) return base;
+
+  // ① 相邻两分支的边线交点 p（ribbon 的外边界 = outer）。
+  //    A 用左法线、B 用右法线，交点正好落在 A、B 夹出的那个角上。
+  const corners: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const A = apps[i];
+    const B = apps[(i + 1) % n];
+    const nA = new Pt(-A.dir.y, A.dir.x);
+    const nB = new Pt(B.dir.y, -B.dir.x);
+    const pA = new Pt(at.x + nA.x * A.outer, at.y + nA.y * A.outer);
+    const pB = new Pt(at.x + nB.x * B.outer, at.y + nB.y * B.outer);
+    const p = lineIntersect(pA, A.dir, pB, B.dir);
+    // 锐角路口的交点会飞到很远，不能让它把整条街铺成广场
+    if (p && Pt.distance(p, at) <= Math.max(A.outer, B.outer) * 6) corners.push(p);
+  }
+
+  // ②③ 每个 p 投到最近的分支得 p'；同一分支可能收到多个 p'（图 2 里 curve2
+  //     就同时有 p1'、p2'），比较弧线 Pp' 取**最长**的那个作为收头位置。
+  //     对称路口里 p 到相邻两臂距离完全相等，只取唯一最近会漏掉一整条臂，
+  //     所以容差内的近似平局全部记入 —— 这才对得上资料「任意 N 叉」的说法。
+  const cuts = apps.map(() => 0);
+  for (const p of corners) {
+    const vx = p.x - at.x;
+    const vy = p.y - at.y;
+    const proj: { j: number; t: number; dist: number }[] = [];
+    for (let j = 0; j < n; j++) {
+      const d = apps[j].dir;
+      const t = vx * d.x + vy * d.y;
+      if (t < 0) continue;
+      proj.push({ j, t, dist: Math.hypot(vx - t * d.x, vy - t * d.y) });
+    }
+    if (proj.length === 0) continue;
+    const bestD = Math.min(...proj.map((q) => q.dist));
+    const tol = Math.max(U(0.35), bestD * 0.03);
+    for (const q of proj) {
+      if (q.dist > bestD + tol) continue;
+      cuts[q.j] = Math.max(cuts[q.j], q.t);
+    }
+  }
+
+  // ④ 限幅：解析值决定「各分支长度可以不同」，旧口径决定整体尺度。
+  //    不设上限时锐角路口会把平台铺到下一个路口，不设下限时窄支路盖不住车行核心。
+  //    `limit=false` 用于测试/诊断，直接看解析解本身。
+  if (!limit) return cuts;
+  return cuts.map((c, i) => Math.max(base[i] * 0.72, Math.min(base[i] * 2.4, c)));
+}
+
+/**
+ * 一个转角的"圆弧替换直角"多边形：两个切点 T1/T2、外角点 P、以及它们之间的圆弧。
+ *
+ * 返回的环 = [T1, P, T2, 弧线(T2→T1)]，围住的正是**角点与圆弧之间那一块**。
+ *
+ * 现在只用于「外侧转角铺装」：半径取侧带宽，并进道路用地并把地块咬成圆角。
+ * 车行核心不再并这块 —— 并进去会在 apron 上咬出半圆凹口（见 junction 段注释）。
+ *
+ * `da/db` 是两条路各自被量到的偏移距离（车行半幅或用地半宽），
+ * 两个角点取这两条偏移线的交点 —— 这是唯一在锐角路口也不会算错的做法。
+ */
+function cornerPiece(
+  at: Pt,
+  A: { dir: Pt; ang: number },
+  B: { dir: Pt; ang: number },
+  da: number,
+  db: number,
+  r: number
+): Pt[] | null {
+  if (Math.abs(Math.sin(B.ang - A.ang)) < 0.2) return null; // 近共线：这里没有角
+  const nA = new Pt(-A.dir.y, A.dir.x);
+  const nB = new Pt(B.dir.y, -B.dir.x);
+  const pA = new Pt(at.x + nA.x * da, at.y + nA.y * da);
+  const pB = new Pt(at.x + nB.x * db, at.y + nB.y * db);
+  const P = lineIntersect(pA, A.dir, pB, B.dir);
+  if (!P) return null;
+  if (Pt.distance(P, at) > Math.max(da, db) * 4.5) return null;
+
+  // 两条边的切向：**背离路口**（= 各自 dir 的正方向）。
+  // 方向搞反的话，圆弧会落在路口里面 —— 图上就是"绿地角上贴了一个粉色圆弧补丁"，
+  // 而地块的角仍然是方的（实测截图里那个绿方块就是这么来的）。
+  const uA = new Pt(A.dir.x, A.dir.y);
+  const uB = new Pt(B.dir.x, B.dir.y);
+  const cosang = Math.max(-1, Math.min(1, uA.x * uB.x + uA.y * uB.y));
+  const ang = Math.acos(cosang);
+  if (ang < 0.18 || ang > Math.PI - 0.12) return null;
+  const halfAng = ang / 2;
+  const bx = uA.x + uB.x;
+  const by = uA.y + uB.y;
+  const bl = Math.hypot(bx, by);
+  if (bl < 1e-6) return null;
+  const bis = new Pt(bx / bl, by / bl);
+
+  // 切点：沿线往路口里退 t；t 太大说明这个角非常锐，夹住不让它拉到路中间
+  const tMax = Math.min(da, db) * 1.35;
+  const t = Math.min(r / Math.tan(halfAng), tMax);
+  const rr = Math.min(r, t * Math.tan(halfAng) + 1e-9);
+  const T1 = new Pt(P.x + uA.x * t, P.y + uA.y * t);
+  const T2 = new Pt(P.x + uB.x * t, P.y + uB.y * t);
+  const C = new Pt(P.x + bis.x * (rr / Math.sin(halfAng)), P.y + bis.y * (rr / Math.sin(halfAng)));
+  if (!Number.isFinite(C.x) || !Number.isFinite(C.y)) return null;
+
+  let a1 = Math.atan2(T1.y - C.y, T1.x - C.x);
+  const a2 = Math.atan2(T2.y - C.y, T2.x - C.x);
+  let d = a2 - a1;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  const N = 5;
+  const arcPts: Pt[] = [];
+  for (let k = 1; k < N; k++) {
+    const a = a2 - (d * k) / N; // 从 T2 往 T1 走
+    arcPts.push(new Pt(C.x + Math.cos(a) * rr, C.y + Math.sin(a) * rr));
+  }
+  let ring = [T1, P, T2, ...arcPts];
+  // 统一成逆时针，布尔库对朝向敏感
+  let area = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const q = ring[i];
+    const w = ring[(i + 1) % ring.length];
+    area += q.x * w.y - w.x * q.y;
+  }
+  if (area < 0) ring = ring.reverse();
+  return cleanRing(ring);
+}
+
+/**
+ * 侧带自交的**便宜判据**（替代 O(n²) 的全环自交检测）。
+ *
+ * 修形之后每条街有几十到上百个折点，`ringSelfIntersects` 是 n² 量级：
+ * 600 片侧带 × 200 点² 直接把这一步从 0.2 s 拖到 41 s（实测）。
+ *
+ * 但侧带会自交只有一种成因：**内偏移在尖角处翻过去**。
+ * 判据也就一条：某个折点的转角够大，且内偏移量大到超过相邻段长的一半。
+ * 缓弯（修形后的常态）永远不触发，于是这一步变成 O(n)。
+ */
+function riskyBand(pts: Pt[], h: number): boolean {
+  const n = pts.length;
+  for (let i = 1; i + 1 < n; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const c = pts[i + 1];
+    const l1 = Pt.distance(a, b);
+    const l2 = Pt.distance(b, c);
+    if (l1 < 1e-9 || l2 < 1e-9) continue;
+    const d1x = (b.x - a.x) / l1;
+    const d1y = (b.y - a.y) / l1;
+    const d2x = (c.x - b.x) / l2;
+    const d2y = (c.y - b.y) / l2;
+    const turn = Math.acos(Math.max(-1, Math.min(1, d1x * d2x + d1y * d2y)));
+    if (turn < 0.18) continue;
+    // 内偏移在第 i 点被"吃掉" h·tan(θ/2)；超过段长就会翻折成自交。
+    // （写成 h / cos(θ/2) 是错的：缓弯上 h 有 10 m、段长只有 3.4 m，
+    //   那个式子对任何 10° 以上的折点都成立，等于永远走慢路径 —— 实测 43 s。）
+    if (h * Math.tan(turn / 2) > 0.95 * Math.min(l1, l2)) return true;
+  }
+  return false;
+}
+
+function lineIntersect(p1: Pt, d1: Pt, p2: Pt, d2: Pt): Pt | null {
+  const den = d1.x * d2.y - d1.y * d2.x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((p2.x - p1.x) * d2.y - (p2.y - p1.y) * d2.x) / den;
+  return new Pt(p1.x + d1.x * t, p1.y + d1.y * t);
+}
+
+/** 供街区扣减：把所有道路用地并成一份，减少下游布尔次数 */
+export function mergeReserve(reserve: PlanSurface[]): PlanSurface[] {
+  return unionPolys(reserve);
+}

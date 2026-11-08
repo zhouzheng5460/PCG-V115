@@ -3,8 +3,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Model } from '../town/model';
-import { buildTownMeshes, type Primitive } from '../export/build3d';
+import { buildTownMeshes, sceneToPrimitives, type Primitive } from '../export/build3d';
 import type { PlanningMode } from '../scene/planner-bridge';
+import type { Scene } from '../scene/types';
 
 export class View3D {
   private container: HTMLElement;
@@ -117,6 +118,30 @@ export class View3D {
       pattern: opts.pattern ?? 'off',
       parkingProvider: opts.parkingProvider ?? 'legacy',
     });
+    this.buildMeshes(prims, model.cityRadius || 100);
+  }
+
+  /**
+   * 直接给一份 Scene 建场景（F3 城市合成器走这条）。
+   *
+   * 和 setModel 共用同一段网格化 + 相机逻辑：**同一份 Scene 出同一个 3D**，
+   * 差别只是场景从哪来（一个从 model 现算，一个由 F3 直接产出）。
+   */
+  setScene(
+    scene: Scene,
+    opts: { layers?: (id: string) => boolean; hiliteLotRoad?: boolean; cityRadius?: number } = {}
+  ): void {
+    this.clear();
+    const radius = opts.cityRadius ?? 100;
+    const prims = sceneToPrimitives(scene, {
+      layers: opts.layers as never,
+      hiliteLotRoad: opts.hiliteLotRoad,
+      cityRadius: radius,
+    });
+    this.buildMeshes(prims, radius);
+  }
+
+  private buildMeshes(prims: Primitive[], radius0: number): void {
     const matCache = new Map<string, THREE.MeshStandardMaterial>();
 
     for (const prim of prims) {
@@ -137,7 +162,16 @@ export class View3D {
         matCache.set(key, mat);
       }
       const mesh = new THREE.Mesh(geom, mat);
-      mesh.castShadow = prim.group !== 'ground' && prim.group !== 'street' && prim.group !== 'plaza';
+      /**
+       * 只让**有体积的东西**投影：地面、街道、广场、以及所有 `road/*` 图层
+       * （车行面、路口、路缘、人行道、绿化、**标线**）都不投影。
+       *
+       * 标线本来是零厚度的贴地面片，落在沥青上方 1~2 cm；一旦参与投影，
+       * 2048 的阴影贴图（1.2 m/texel）会把 15 cm 宽的斑马线/停止线/箭头
+       * 糊成一圈**放射状黑色尖刺** —— 用户截图里路口中央那团"星形"就是它。
+       */
+      const flat = prim.group === 'ground' || prim.group === 'street' || prim.group === 'plaza' || prim.group.startsWith('road/');
+      mesh.castShadow = !flat;
       mesh.receiveShadow = true;
       mesh.name = prim.name;
       mesh.userData.group = prim.group;
@@ -145,7 +179,7 @@ export class View3D {
     }
 
     // 地面接收阴影的底盘
-    const radius = model.cityRadius || 100;
+    const radius = radius0 || 100;
     const disc = new THREE.Mesh(
       new THREE.CircleGeometry(radius * 1.9, 64),
       new THREE.MeshStandardMaterial({ color: '#1c1f24', roughness: 1 })
