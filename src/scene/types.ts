@@ -188,12 +188,6 @@ export interface Scene {
   paths: PathFeature[];
   lots: LotInfo[];
   stats: SceneStats;
-
-  /**
-   * Planner 模式的逐地块报告（R8 Debug HUD 用）。
-   * legacy 模式下为空 —— 前端据此判断"现在到底跑的是哪条链"。
-   */
-  planner?: import('./planner-bridge').PlannerBundle;
 }
 
 export function emptyScene(): Scene {

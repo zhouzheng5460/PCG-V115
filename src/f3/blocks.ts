@@ -203,7 +203,13 @@ export function splitParcels(
   seed: number,
   mode: 'binary' | 'row' = 'row',
   /** 一级分区前缀：同一街区被张量场切成几块大分区时，地块 id 不能撞车 */
-  idPrefix: string = block.id
+  idPrefix: string = block.id,
+  /**
+   * 人工覆盖（属性面板）：切分方向与目标地块数。
+   * 方向只影响"刀口朝向"，数量换算成目标面积后仍交给同一套二叉分割，
+   * 不做"精确切 N 块"—— 几何上无法保证，硬凑会切出 3 m 宽的纸片。
+   */
+  over?: { axisRad?: number; parcels?: number }
 ): ParcelResult {
   const notes: string[] = [];
   const rng = makeRng(seed, `parcel-${block.id}`);
@@ -243,6 +249,18 @@ export function splitParcels(
    * 每个街区给独立 seed：binarySplit 内部用固定 tag 起随机序列，
    * 传同一个 seed 会让所有街区的刀角/切点序列一模一样。
    */
+  /** 目标面积被"切分数量"改写时，按街区面积/数量反推，并夹在合理区间 */
+  /**
+   * 目标面积 = 街区面积 / 块数，再乘 1.35 的修正。
+   *
+   * 二叉分割的停止条件是"这块 ≤ target"，于是实际块数天然比 area/target 多一点
+   * （实测填 4 会切出 7 块）。乘 1.35 之后 4 → 4~5、12 → 11~14，跟面板上的数字对得上。
+   */
+  const targetOverride =
+    over?.parcels && over.parcels > 0
+      ? Math.max(90, Math.min(26000, (areaM2(block.surface) / over.parcels) * 1.35))
+      : null;
+
   if (mode === 'binary') {
     /**
      * 每个街区的目标块尺度带倍率：固定 target 会把全城切成一样大的块，
@@ -266,10 +284,10 @@ export function splitParcels(
      *   · 商业/CBD 保持小地块：文中明确「地块面积都不宜过大，如果地块过大，
      *     ① 的中心会很空，② 的步行路线将过长」，且商业只留最外一圈。
      */
-    const target = Math.min(A * scale * (commercialish ? 1 : 1.9), commercialish ? 1400 : 2600);
+    const target = targetOverride ?? Math.min(A * scale * (commercialish ? 1 : 1.9), commercialish ? 1400 : 2600);
     const faces = binarySplit(block.surface, {
       seed: (seed ^ idSeed(block.id)) >>> 0,
-      axisRad: block.frontRad,
+      axisRad: over?.axisRad ?? block.frontRad,
       targetM2: target,
       minM2: Math.max(80, target * 0.22),
       minSideM: 9,
@@ -285,9 +303,10 @@ export function splitParcels(
     };
   }
 
-  const ux = Math.cos(block.frontRad);
-  const uy = Math.sin(block.frontRad);
-  const along = block.frontRad + Math.PI / 2;
+  const axis = over?.axisRad ?? block.frontRad;
+  const ux = Math.cos(axis);
+  const uy = Math.sin(axis);
+  const along = axis + Math.PI / 2;
 
   // ① 成排：沿进深方向切
   const rows = sliceAlong(block.surface, { x: ux, y: uy }, along, depthU, minArea * 1.6);

@@ -25,6 +25,7 @@ import { M2, U, cleanRing, distPointToPolyline, shapeOf } from './geom';
 import { bboxOf, insideSurface, surfaceArea, surfaceSubtract, type PlanSurface } from '../town/planning/core/surface';
 import { tensorLines } from '../town/planning/roadgraph/skeleton/tensor';
 import { buildPathGraph } from './streets';
+import { simplifyGraph } from './graphclean';
 import { classifyStreets, designGraph } from './design';
 import { growStreets, snapEnds, type GrowResult } from './grow';
 import type { CitySpec, RawRoad, RoadClass3, StylePreset } from './types';
@@ -485,6 +486,9 @@ export function growStreetsTensor(spec: CitySpec, preset: StylePreset): GrowResu
     notes.push(`平行街最终合并：${beforeFinal} → ${merged.length} 条（最终几何上 < 34 m 且平行 ≥ 60 m）`);
   }
   const graph = buildPathGraph(merged, spec.boundary);
+  // 多线相交的第一道对策：把"同一处被切成几个路口"合回去（见 graphclean.ts）
+  if (spec.noGraphClean) notes.push('路网图清理：已按调试开关关闭（?f3clean=0）');
+  else notes.push(...simplifyGraph(graph).notes);
   const design = designGraph(graph, spec.style, spec.seed, spec.boundary);
   const cls = classifyStreets(graph, notes);
   design.mix = cls.mix;

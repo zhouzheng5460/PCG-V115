@@ -48,6 +48,28 @@ export interface CitySpec {
   /** 建筑高度倍率（UI 全局滑杆用） */
   heightScale?: number;
   /**
+   * 禁建区（用户在图上画的固定范围）。
+   *
+   * 语义：**生成完之后**再做局部后处理（`zoneapply.ts`），不参与路网与街区生成。
+   *   · 禁区**本体**：里面的建筑**整栋**剔除（不是布尔切）、地块地面换成禁区材质、
+   *     与本体重叠的**路面被裁掉**；
+   *   · 本体 + 让距（`zonePadM`）：只在地块层面生效——剔楼、铺装、补树，
+   *     **不动路面**（用户明确要求"让距范围影响的道路不要调整"）；
+   *   · 让距内可选生成"衔接铺装"（内部路 / 草地 / 停车场）。
+   *
+   * 交互界面会按"无禁区"缓存基础城市，改禁区只重跑后处理（毫秒级）；
+   * 直接调 `runF3City({ zones })` 时入口会替你调一次后处理，效果一致。
+   */
+  zones?: import('../town/zones').Zone[];
+  /** 禁区的让距（米，默认 6 m = 一条人行道）。只在有 zones 时生效 */
+  zonePadM?: number;
+  /** 让距内是否生成衔接铺装（内部路 / 草地 / 停车场），默认 true */
+  zonePadPave?: boolean;
+  /** 逐街区覆盖（切分方向 / 地块数 / 类型 / 楼高），键是街区 id（`B12`） */
+  blockOverrides?: Record<string, BlockOverride>;
+  /** 调试开关：关掉路网图清理（`?f3clean=0`），用来 A/B 对比多线相交是否真的被清掉 */
+  noGraphClean?: boolean;
+  /**
    * 路网创建方式（先后关系，不是并列的两套路网）：
    *   `tensor`（默认）—— 第一步用 legacy 张量场生成道路，之后才切分街道围成的地块；
    *   `split`        —— 回退到递归面切分生成道路（对比用，URL `?f3road=split`）。
@@ -271,6 +293,33 @@ export interface PathGraph {
 // ---------------------------------------------------------------- 街区与地块
 
 export type BlockUse = 'residential' | 'commercial' | 'cbd' | 'industrial' | 'campus' | 'park' | 'civic' | 'green';
+
+/**
+ * 属性面板能选的"地块类型"：BlockUse + 一个**保留地**。
+ *
+ * 保留地故意不进 `BlockUse`：它不是一种用地指标，而是"这块地什么都不许盖"。
+ * 生成时按"公园"的切分规则走（整块不切），但地面铺硬地、不排建筑 ——
+ * 这样 12 张按用途查表的 Record 不用全部加一行空值。
+ */
+export type UseChoice = BlockUse | 'reserved';
+
+/**
+ * 单街区的人工覆盖（属性面板里改的那四项）。
+ *
+ * 为什么放在 CitySpec 而不是生成后再改几何：
+ * 切分方向 / 切分数量会改变地块拓扑，建筑与地面都是从地块派生的 ——
+ * 只有回到生成入口重跑，才不会出现"楼还按旧地块摆"的错位。
+ */
+export interface BlockOverride {
+  /** 切分方向（弧度）：地块长轴朝向。不填 = 按临街方向 */
+  axisRad?: number;
+  /** 目标地块数：换算成目标面积后交给二叉分割（近似值，最后按几何微调） */
+  parcels?: number;
+  /** 地块类型（含保留地） */
+  use?: UseChoice;
+  /** 该街区的建筑高度倍率（1 = 全局） */
+  heightScale?: number;
+}
 
 export interface CityBlock {
   id: string;

@@ -26,6 +26,7 @@ import { insideSurface, surfaceArea, surfaceIntersect, type PlanSurface } from '
 import { makeRng, obbOf } from '../town/planning/subdivision/geom';
 import { M2, U, cleanRing, clipLineToSurface, polyLen, shapeOf } from './geom';
 import { buildPathGraph, cityField, mainAxisOf } from './streets';
+import { simplifyGraph } from './graphclean';
 import { classifyStreets, designGraph, type DesignStats } from './design';
 import type { CitySpec, PathGraph, RawRoad, RoadClass3, StylePreset } from './types';
 
@@ -241,6 +242,7 @@ export function growStreets(spec: CitySpec, preset: StylePreset, opts: GrowOpts 
   // 于是留下 60~145 m 的孤立"断头路"（实测 10 根）。这里把端点拉回 1.5 m 内最近的路。
   const snapped = snapEnds(raws, U(1.5));
   const graph = buildPathGraph(snapped, spec.boundary);
+  if (!spec.noGraphClean) notes.push(...simplifyGraph(graph).notes);
 
   /**
    * 修形 + 分级。

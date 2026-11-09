@@ -19,3 +19,6 @@ Thumbs.db
 
 # WorkBuddy 会话数据
 .workbuddy/
+
+# 本地量尺脚本（性能 / 禁区对照，见 docs/F3_PERF_ZONE_PLAN.md）
+.scratch/

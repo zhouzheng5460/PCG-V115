@@ -1,5 +1,10 @@
 # TownForge
 
+> 现状（2026-11-09）：单一生成器 **F3 规则城市** + 单一 three.js 视口（透视 / 正交顶视）。
+> 架构与改动见 [`docs/F3_V2_ARCHITECTURE.md`](./docs/F3_V2_ARCHITECTURE.md)，
+> 性能与禁区机制见 [`docs/F3_PERF_ZONE_PLAN.md`](./docs/F3_PERF_ZONE_PLAN.md)。
+> 下面关于 legacy / Planner 的描述是历史版本，仅作背景。
+
 > **接手开发请先读 [`AI_HANDOFF.md`](./AI_HANDOFF.md)** —— 开关矩阵、当前进度、待办与雷区。
 > 分阶段完整叙事见 [`DEVELOPMENT.md`](./DEVELOPMENT.md)。
 

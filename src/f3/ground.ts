@@ -11,6 +11,8 @@
 //   ④ 树木（在绿地里按网格 + 抖动放，避开建筑与入口）
 
 import { Pt } from '../core/geom';
+import { bufferPolyline } from '../core/polyline';
+import { roundDomain } from './rounding';
 import {
   insideSurface,
   surfaceArea,
@@ -18,6 +20,7 @@ import {
   surfaceIntersect,
   surfaceOffset,
   surfaceSubtract,
+  surfaceUnion,
   type PlanSurface,
 } from '../town/planning/core/surface';
 import { solveParking } from '../town/parking';
@@ -25,15 +28,23 @@ import { makeRng } from '../town/planning/subdivision/geom';
 import type { PropFeature, SurfaceFeature } from '../scene/types';
 import { MAT } from '../scene/palette';
 import type { MatKey } from '../scene/palette';
-import { M2, U, areaM2, cleanRing, rectRing, shapeOf } from './geom';
+import { M2, U, areaM2, cleanRing, clipLineToSurface, rectRing, shapeOf } from './geom';
 import { maxInscribedRect } from './build';
 import type { BuildingParcel, InscribedRect, StylePreset } from './types';
 
+/**
+ * 地块地面的"类"。
+ *
+ * `pave` 是这一版合并出来的：原先分 `paving`（前场/碎片铺装）、`drive`（入口车道）、
+ * `hard`（余量硬铺）三类 —— 它们在地图上本来就长一个样，都是"地块内可走的硬质面"，
+ * 用户在草地上看到的那一道道浅色带子就是它们。现在统一成 `pave`，
+ * 与"内部路"同属一类（图层仍分车行/步行两个开关）。
+ */
 export interface LotPatch {
   ring: Pt[];
   holes?: Pt[][];
   mat: MatKey;
-  kind: 'paving' | 'parking' | 'drive' | 'lawn' | 'greenL' | 'greenEdge' | 'planter' | 'hard' | 'water';
+  kind: 'pave' | 'parking' | 'lawn' | 'greenL' | 'greenEdge' | 'planter' | 'water';
   y: number;
 }
 
@@ -58,7 +69,31 @@ export interface GroundOpts {
   heightScale: number;
   /** 内院保护区：布局层四边围合出来的近矩形院落，整片做院落绿化 */
   courtyard?: PlanSurface | null;
+  /**
+   * 已经画好的**地块内硬质通路**（布局层的内部路 / 步行街、街区级步行街）。
+   *
+   * 它们与地块地面同层，必须先扣掉再铺地面：不然草地会盖在内部路上，
+   * 或者内部路压着草地（实测这两处造成 3.4 万 m² + 4900 m² 的重叠）。
+   */
+  innerRoads?: PlanSurface[];
 }
+
+/**
+ * 地面层的分项计时（`F3_DEBUG=1` 时由 index.ts 打印）。
+ * 认领（take）是这一步的大头：每块地 6~8 次布尔，必须能看见它到底占多少。
+ */
+export const groundStats = {
+  takeMs: 0,
+  takeN: 0,
+  parkMs: 0,
+  parkN: 0,
+  /** 去重叠前后草地面积（调试：差太多说明减法出问题了） */
+  lawnBefore: 0,
+  lawnAfter: 0,
+  /** 地面层缓存命中 / 未命中（调试：看"只改一块地"有没有真的省下来） */
+  cacheHits: 0,
+  cacheMiss: 0,
+};
 
 const EMPTY: GroundOut = {
   patches: [],
@@ -72,6 +107,49 @@ const EMPTY: GroundOut = {
   note: '',
 };
 
+/**
+ * 地面层的**按地块缓存**。
+ *
+ * 只改一个地块的参数时，其余地块的输入完全没变，但 `groundForParcel` 是全城最贵的一步
+ * （占阶段④ 70% 以上：每块地十几次布尔）。这里按"地块几何 + 建筑 + 输入参数"的签名
+ * 缓存结果，改一块地时只有它自己重算，其他地块直接复用 —— 用户要的"只影响当前地块"。
+ */
+const groundCache = new Map<string, GroundOut>();
+const GROUND_CACHE_MAX = 6000;
+
+function ringSig(ring: Pt[] | undefined): string {
+  if (!ring || ring.length === 0) return '';
+  let h = 2166136261;
+  for (const p of ring) {
+    h = Math.imul(h ^ Math.round(p.x * 1000), 16777619);
+    h = Math.imul(h ^ Math.round(p.y * 1000), 16777619);
+  }
+  return `${ring.length}:${(h >>> 0).toString(36)}`;
+}
+
+function groundSig(
+  parcel: BuildingParcel,
+  rect: InscribedRect | null,
+  footprintRing: Pt[] | null,
+  footprints: PlanSurface[],
+  opts: GroundOpts
+): string {
+  return [
+    parcel.id,
+    parcel.use,
+    ringSig(parcel.surface.outer),
+    ringSig(rect?.ring),
+    ringSig(footprintRing ?? undefined),
+    footprints.map((f) => ringSig(f.outer)).join(','),
+    ringSig(opts.courtyard?.outer),
+    (opts.innerRoads ?? []).length,
+    opts.entrances.map((e) => `${e.x.toFixed(1)},${e.y.toFixed(1)}`).join(';'),
+    opts.seed,
+    opts.heightScale,
+    opts.preset.note,
+  ].join('|');
+}
+
 export function groundForParcel(
   parcel: BuildingParcel,
   rect: InscribedRect | null,
@@ -79,12 +157,35 @@ export function groundForParcel(
   footprints: PlanSurface[],
   opts: GroundOpts
 ): GroundOut {
+  const key = groundSig(parcel, rect, footprintRing, footprints, opts);
+  const hit = groundCache.get(key);
+  if (hit) {
+    groundStats.cacheHits++;
+    return hit;
+  }
+  const out = groundForParcelRaw(parcel, rect, footprintRing, footprints, opts);
+  if (groundCache.size > GROUND_CACHE_MAX) groundCache.clear();
+  groundCache.set(key, out);
+  groundStats.cacheMiss++;
+  return out;
+}
+
+function groundForParcelRaw(
+  parcel: BuildingParcel,
+  rect: InscribedRect | null,
+  footprintRing: Pt[] | null,
+  footprints: PlanSurface[],
+  opts: GroundOpts
+): GroundOut {
   const rng = makeRng(opts.seed, `ground-${parcel.id}`);
+  const _dbg = typeof process !== 'undefined' && !!process.env?.F3_DEBUG;
   const out: GroundOut = { ...EMPTY, patches: [], stallLines: [], trees: [], props: [] };
   const use = parcel.use;
   const claimed: PlanSurface[] = [];
 
-  const residual = footprints.length ? safeSubtract([parcel.surface], footprints) : [parcel.surface];
+  /** 建筑 + 内部路 都算"不能铺地面"的部分，先一起扣掉 */
+  const taken0: PlanSurface[] = [...footprints, ...(opts.innerRoads ?? [])];
+  const residual = taken0.length ? safeSubtract([parcel.surface], taken0) : [parcel.surface];
   const residualM2 = residual.reduce((s, q) => s + M2(surfaceArea(q)), 0);
   if (residualM2 < 20) {
     out.note = '没有剩余地面（建筑占满地块）';
@@ -131,6 +232,7 @@ export function groundForParcel(
    * 全城 1200 个地块把 ground 这一步从 1.5 s 拖到 4 s（实测）。
    */
   let remaining = residual;
+  let _takeMs = 0;
   const take = (
     ring: Pt[],
     kind: GroundOut['patches'][number]['kind'],
@@ -138,6 +240,7 @@ export function groundForParcel(
     y: number,
     minM2 = 2
   ): number => {
+    const _t0 = _dbg ? Date.now() : 0;
     const poly: PlanSurface = { outer: cleanRing(ring), holes: [] };
     const clipped = safeIntersect([poly], remaining);
     let got = 0;
@@ -149,6 +252,50 @@ export function groundForParcel(
       got += A;
     }
     if (got > 0) remaining = safeSubtract(remaining, [poly]);
+    if (_dbg) {
+      _takeMs += Date.now() - _t0;
+      groundStats.takeN++;
+      groundStats.takeMs += Date.now() - _t0;
+    }
+    return got;
+  };
+
+  /**
+   * 同类多块一起认领：先把它们并成一张面，再**只做一次** intersect + subtract。
+   *
+   * 为什么可以合并：这些候选都是同一种材质（例如都是草地），彼此重叠也无所谓 ——
+   * 合并后原本 6 块 = 12 次布尔，现在 = 1 次并集 + 1 次交 + 1 次差 = 3 次。
+   * 全城 800 块地，这一步能省掉几千次 polygon-clipping（见 groundStats）。
+   */
+  const takeMany = (
+    rings: Pt[][],
+    kind: GroundOut['patches'][number]['kind'],
+    mat: MatKey,
+    y: number,
+    minM2 = 2
+  ): number => {
+    if (rings.length === 0) return 0;
+    const t0 = _dbg ? Date.now() : 0;
+    let poly: PlanSurface[] = [];
+    try {
+      poly = surfaceUnion(rings.map((r) => ({ outer: cleanRing(r), holes: [] })));
+    } catch {
+      poly = rings.map((r) => ({ outer: cleanRing(r), holes: [] }));
+    }
+    const clipped = safeIntersect(poly, remaining);
+    let got = 0;
+    for (const q of clipped) {
+      const A = M2(surfaceArea(q));
+      if (A < minM2) continue;
+      claimed.push(q);
+      out.patches.push({ ring: q.outer, holes: q.holes, mat, kind, y });
+      got += A;
+    }
+    if (got > 0) remaining = safeSubtract(remaining, poly);
+    if (_dbg) {
+      groundStats.takeN++;
+      groundStats.takeMs += Date.now() - t0;
+    }
     return got;
   };
 
@@ -240,14 +387,28 @@ export function groundForParcel(
         .sort((a, b) => M2(surfaceArea(b)) - M2(surfaceArea(a)));
       const lotPoly = pieces[0];
       if (lotPoly) {
+        /** 这一块停车坪的车位线（外包矩形定了以后再统一裁） */
+        const lotLines: [Pt, Pt][] = [];
         const se = extents(lotPoly.outer.map(toUV));
         // 车道：从停车场靠街一侧拉到临街边界
         const laneV = Math.min(se.v1 - U(4.5), Math.max(se.v0, fV0));
-        take(uvRect(frontU, se.u0 + U(0.2), laneV, laneV + U(4.5)), 'drive', 'asphaltLot', 0.0118, 8);
+        take(uvRect(frontU, se.u0 + U(0.2), laneV, laneV + U(4.5)), 'pave', 'lotPath', 0.0118, 8);
 
         const lotM2 = M2(surfaceArea(lotPoly));
         claimed.push(lotPoly);
-        out.patches.push({ ring: lotPoly.outer, holes: lotPoly.holes, mat: 'asphaltLot', kind: 'parking', y: 0.0122 });
+        /**
+         * 停车坪先按"候选矩形"占位（S4 的第一步：**不等车位排完再算面积**）。
+         * 真正的停车面会在下面拿到车位布局之后，用**车位外包矩形**重算并替换，
+         * 于是沥青边界贴着车位排走，而不是一个比车位大一圈的方框。
+         */
+        const parkingPatch: GroundOut['patches'][number] = {
+          ring: lotPoly.outer,
+          holes: lotPoly.holes,
+          mat: 'asphaltLot',
+          kind: 'parking',
+          y: 0.0122,
+        };
+        out.patches.push(parkingPatch);
         remaining = safeSubtract(remaining, [lotPoly]);
         out.parkingM2 += lotM2;
 
@@ -266,11 +427,12 @@ export function groundForParcel(
          * 每 6.3 m 一根 2.3 m 短分隔线，不把整条带子横着切断。
          */
         const onLot = solveParking(cleanRing(lotPoly.outer), { angles: [angle], maxAngles: 1 });
+
         const narrow = shapeOf(lotPoly).minorM < 10.5;
         if (narrow || !onLot || onLot.count < 3) {
           const lines = parallelBayLines(se, fromUV);
           const kept = linesInside(lines, lotPoly);
-          for (const l of kept) out.stallLines.push(l);
+          for (const l of kept) lotLines.push(l);
           // 短分隔线（长度 < 3.2 m）有几根就有几个平行车位；
           // 通长基线不算车位，也不按 bbox 跨度虚报。
           const ticks = kept.filter(([a, b]) => Pt.distance(a, b) < U(3.2)).length;
@@ -280,8 +442,9 @@ export function groundForParcel(
           // 前缘线：每排一条通长基线；通长线跨出凹口时退回逐格短线
           const merged = linesInside(mergeStallFronts(onLot.fronts), lotPoly);
           const fronts = merged.length ? merged : linesInside(onLot.fronts, lotPoly);
-          for (const l of dividers) out.stallLines.push(l);
-          for (const l of fronts) out.stallLines.push(l);
+          // 先收集，等下面算出"车位外包矩形"之后再裁一次（避免线跑出沥青）
+          for (const l of dividers) lotLines.push(l);
+          for (const l of fronts) lotLines.push(l);
           out.bays += dividers.length;
           for (const isl of onLot.islands) {
             for (const q of safeIntersect([{ outer: isl, holes: [] }], [lotPoly])) {
@@ -293,6 +456,64 @@ export function groundForParcel(
             }
           }
         }
+        /**
+         * S4 · 停车面 = **车位布局的外包矩形**（不额外做布尔）。
+         *
+         * 旧版停车坪直接铺候选矩形：车位只占满中间一条，四周留一圈无用的沥青，
+         * 而草地又被这块矩形整整齐齐地切掉 —— 边界是"方框"而不是车位。
+         * 现在把车位线 / 通道的端点投影到停车角度的两个轴上取包络，
+         * 得到一个贴着实排的矩形（0 次布尔），停车面与草地的分界就贴着车位。
+         */
+        if (onLot && onLot.count > 0) {
+          const dirU = new Pt(Math.cos(onLot.angle), Math.sin(onLot.angle));
+          const dirV = new Pt(-dirU.y, dirU.x);
+          const pts: Pt[] = [];
+          for (const [a, b] of onLot.dividers) pts.push(a, b);
+          for (const [a, b] of onLot.fronts) pts.push(a, b);
+          for (const poly of onLot.aisles) for (const q of poly) pts.push(q);
+          if (pts.length >= 3) {
+            let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+            for (const q of pts) {
+              const u = q.x * dirU.x + q.y * dirU.y;
+              const v = q.x * dirV.x + q.y * dirV.y;
+              u0 = Math.min(u0, u); u1 = Math.max(u1, u);
+              v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+            }
+            // 外扩 0.9 m：车位线是贴着外框画的，沥青必须比线大一圈，否则线会露在草地/铺装上
+            const pad = U(0.9);
+            const cU = (u0 + u1) / 2;
+            const cV = (v0 + v1) / 2;
+            const hwU = (u1 - u0) / 2 + pad;
+            const hwV = (v1 - v0) / 2 + pad;
+            const center = new Pt(dirU.x * cU + dirV.x * cV, dirU.y * cU + dirV.y * cV);
+            const outer = rectRing(center, hwU, hwV, onLot.angle);
+            const area = hwU * hwV * 4 * 49;
+            /**
+             * 三个条件才替换：
+             *   · 面积合理（不该比候选矩形还大）；
+             *   · **所有车位线的端点都在这个矩形里** —— 否则线会露到沥青外面
+             *     （实测 32 条线因此悬空在黑底上，`test/f3-road` 会抓）。
+             */
+            const rectS = { outer, holes: [] as Pt[][] };
+            const allLinesIn = lotLines.every(([a, b]) => insideSurface(a, rectS) && insideSurface(b, rectS));
+            /**
+             * 外扩 0.9 m 之后矩形可能探进**内部路 / 建筑**（它们不在 residual 里）。
+             * 这里再裁回 residual 一次，保证停车坪不会压到地块通路上（实测 33 m²）。
+             */
+            const clippedObb = safeIntersect([rectS], residual).sort(
+              (a, b) => M2(surfaceArea(b)) - M2(surfaceArea(a))
+            )[0];
+            if (allLinesIn && clippedObb && area > 20 && area <= lotM2 * 1.05) {
+              parkingPatch.ring = clippedObb.outer;
+              parkingPatch.holes = clippedObb.holes ?? [];
+              out.parkingM2 += area - lotM2;
+              // 线不再重裁：外扩量（0.9 m）已经保证线落在沥青里，
+              // 重裁反而会把跨在边上的线整根丢掉（实测 41 条线因此消失）。
+            }
+          }
+        }
+        // 车位线在这个地块处理完之后统一推入（外包矩形已经把它们的端点都包进去了）
+        for (const l of lotLines) out.stallLines.push(l);
       }
     }
     void spotRect;
@@ -309,7 +530,7 @@ export function groundForParcel(
   // 刻意放在停车之后：停车仍按 parkShare 占一角，不会被内院挤到 0；
   // 内院 y 取 0.0108，比停车（0.0122）低，不会盖住车位线。
   if (opts.courtyard && opts.courtyard.outer.length >= 3) {
-    const A = take(opts.courtyard.outer, 'lawn', 'grass', 0.0108, 40);
+    const A = take(opts.courtyard.outer, 'lawn', 'lawn', 0.0108, 40);
     if (A > 0) out.lawnM2 += A;
   }
 
@@ -317,7 +538,7 @@ export function groundForParcel(
   if (rect && rect.ring.length === 4 && footprintRing && footprintRing.length === 4) {
     const ring = frontStrip(rect, footprintRing);
     if (ring) {
-      out.pavingM2 += take(ring, 'paving', pavingMat(use), 0.012);
+      out.pavingM2 += take(ring, 'pave', 'lotPath', 0.012);
     }
   }
 
@@ -335,7 +556,7 @@ export function groundForParcel(
         grown = [];
       }
       if (!grown.length) continue;
-      out.pavingM2 += take(grown[0].outer, 'paving', pavingMat(use), 0.0121, 6);
+      out.pavingM2 += take(grown[0].outer, 'pave', 'lotPath', 0.0121, 6);
     }
   }
 
@@ -379,16 +600,19 @@ export function groundForParcel(
     // 沿 u 方向的一条（从同一个角往回收 45% 的面宽）
     const span = (vMax - vMin) * 0.45;
     const alongU = uvRect(atFront ? frontU : backU - wLeg, atFront ? frontU + wLeg : backU, atVMin ? vMin : vMax - span, atVMin ? vMin + span : vMax);
-    greenM2 += take(alongV, 'greenL', 'lawn', 0.0131, 8);
-    greenM2 += take(alongU, 'greenL', 'lawn', 0.0132, 8);
-  }
-
-  // ================================================================ ④ 沿边种植带
-  if (greenM2 < wantGreenM2 && residualM2 > 140) {
-    const w = U(2.2);
-    greenM2 += take(uvRect(backU - w, backU, vMin + U(0.6), vMax - U(0.6)), 'greenEdge', 'lawn', 0.0117, 10);
-    greenM2 += take(uvRect(fFrontU, backU, vMin, vMin + w), 'greenEdge', 'lawn', 0.0117, 10);
-    greenM2 += take(uvRect(fFrontU, backU, vMax - w, vMax), 'greenEdge', 'lawn', 0.0117, 10);
+    /**
+     * L 形的两条边 + 沿边种植带 + 花坛：**一次并集、一次认领**。
+     *
+     * 它们都是同一种草地，谁压谁无所谓；分开认领等于把同一次布尔做 6 遍。
+     */
+    const greenRings: Pt[][] = [alongV, alongU];
+    if (residualM2 > 140) {
+      const w = U(2.2);
+      greenRings.push(uvRect(backU - w, backU, vMin + U(0.6), vMax - U(0.6)));
+      greenRings.push(uvRect(fFrontU, backU, vMin, vMin + w));
+      greenRings.push(uvRect(fFrontU, backU, vMax - w, vMax));
+    }
+    greenM2 += takeMany(greenRings, 'lawn', 'lawn', 0.0117, 8);
   }
 
   // ================================================================ ⑤ 广场花坛
@@ -418,8 +642,8 @@ export function groundForParcel(
     if (plazaU1 > plazaU0 + U(4) && span > U(14)) {
       out.pavingM2 += take(
         uvRect(plazaU0, plazaU1, vMin + span * 0.25, vMax - span * 0.25),
-        'paving',
-        'stonePave',
+        'pave',
+        'lotPath',
         0.0126,
         20
       );
@@ -446,8 +670,8 @@ export function groundForParcel(
     out.patches.push({
       ring: q.outer,
       holes: q.holes,
-      mat: keepGreen ? 'grass' : 'concrete',
-      kind: keepGreen ? 'lawn' : 'hard',
+      mat: keepGreen ? 'lawn' : 'lotPath',
+      kind: keepGreen ? 'lawn' : 'pave',
       y: 0.0112,
     });
     if (keepGreen) {
@@ -481,6 +705,27 @@ export function groundForParcel(
       out.trees.push({ at: p, scale: 0.82 + rng() * 0.34, seed: Math.floor(rng() * 1000) });
       placed++;
     }
+  }
+
+  /**
+   * 三类地面最终去重叠（停车 > 通路 > 草地）。
+   * 必须放在**所有** patch 都 push 完之后 —— 余量硬铺是在最后一段才补的。
+   */
+  enforceDisjoint(out);
+  // 去重叠后面积会变，重新统计一遍（账要对得上）
+  {
+    let pv = 0;
+    let pk = 0;
+    let lw = 0;
+    for (const q of out.patches) {
+      const A = M2(surfaceArea({ outer: q.ring, holes: q.holes ?? [] }));
+      if (q.kind === 'parking') pk += A;
+      else if (q.kind === 'lawn' || q.kind === 'greenL' || q.kind === 'greenEdge' || q.kind === 'planter') lw += A;
+      else if (q.kind === 'pave') pv += A;
+    }
+    out.pavingM2 = pv;
+    out.parkingM2 = pk;
+    out.lawnM2 = lw;
   }
 
   if (out.note === '') {
@@ -619,6 +864,122 @@ function pavingMat(use: BuildingParcel['use']): MatKey {
   }
 }
 
+
+/**
+ * 最终去重叠：**地块四类地面不许互相压**。
+ *
+ * 为什么必须在最后再兜一刀：
+ * `safeSubtract` 在布尔失败时会把**被减数原样返回**（这是 polygon-clipping 的
+ * 老毛病，见 AI_HANDOFF §6.1）。一处失败，后面所有"认领"都会在第一类上叠着长，
+ * 实测停车×草地重叠能到 3.4 万 m² —— 俯视就是"草地上一大块深色沥青"。
+ *
+ * 做法：按优先级 停车 → 通路 → 草地 重新裁一遍（同类先并成一片，只做 2 次布尔）。
+ * 代价是每块地多 4 次布尔，换来的是三类**结构性**零重叠，不依赖每一步布尔都成功。
+ */
+function enforceDisjoint(out: GroundOut): void {
+  // 调试开关：`F3_NO_DISJOINT=1` 关掉这一刀，用来定位"草地消失"是它还是别处
+  if (typeof process !== 'undefined' && process.env?.F3_NO_DISJOINT) return;
+  const LAWN: GroundOut['patches'][number]['kind'][] = ['lawn', 'greenL', 'greenEdge', 'planter'];
+  const asSurf = (list: GroundOut['patches']): PlanSurface[] =>
+    list.map((p) => ({ outer: p.ring, holes: p.holes ?? [] }));
+  const pick = (kinds: GroundOut['patches'][number]['kind'][]): GroundOut['patches'] =>
+    out.patches.filter((p) => kinds.includes(p.kind));
+
+  const carve = (
+    kinds: GroundOut['patches'][number]['kind'][],
+    blockers: PlanSurface[]
+  ): void => {
+    const sel = pick(kinds);
+    if (sel.length === 0 || blockers.length === 0) return;
+    /**
+     * 先把 blocker **并成一张**，再逐片减。
+     *
+     * 不能反过来"把同类并成一张再减"：草地/通路在同一块地里可能是好几片互不相连的
+     * 面，一旦并集出问题（或者被并成一个大外包），减一次就把整块草地削光
+     * —— 实测草地从 118 000 m² 掉到 13 000 m²。
+     */
+    let blockersMerged: PlanSurface[] = blockers;
+    try {
+      const u = surfaceUnion(blockers);
+      if (u.length) blockersMerged = u;
+    } catch {
+      /* 并集失败就用原始列表 */
+    }
+    const bb = blockersMerged.reduce(
+      (acc, q) => {
+        const b = bbox(q.outer);
+        return {
+          minX: Math.min(acc.minX, b.minX),
+          maxX: Math.max(acc.maxX, b.maxX),
+          minY: Math.min(acc.minY, b.minY),
+          maxY: Math.max(acc.maxY, b.maxY),
+        };
+      },
+      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
+    );
+
+    const kept: GroundOut['patches'] = [];
+    const outPieces: PlanSurface[] = [];
+    for (const p of sel) {
+      const qb = bbox(p.ring);
+      // 完全不相交：原样保留（不做布尔，也不能判成"减法失败"）
+      if (bb.minX > qb.maxX || bb.maxX < qb.minX || bb.minY > qb.maxY || bb.maxY < qb.minY) {
+        kept.push(p);
+        continue;
+      }
+      const before = M2(surfaceArea({ outer: p.ring, holes: p.holes ?? [] }));
+      let pieces: PlanSurface[] | null = null;
+      try {
+        const r1 = surfaceSubtract([{ outer: p.ring, holes: p.holes ?? [] }], blockersMerged);
+        const after = r1.reduce((acc, q) => acc + M2(surfaceArea(q)), 0);
+        /**
+         * 失败判据：面积几乎没变（≥99.99%）= 根本没减动。
+         * 这时**原样保留**这一片 —— 宁可留一点重叠，也不能把草地整片删掉
+         * （上一版就是在这里把 89% 的草地丢掉的）。
+         */
+        if (after < before * 0.9999) pieces = r1;
+      } catch {
+        pieces = null;
+      }
+      if (pieces === null) {
+        kept.push(p);
+        continue;
+      }
+      for (const q of pieces) {
+        if (M2(surfaceArea(q)) < 1) continue;
+        outPieces.push(q);
+      }
+    }
+
+    // 丢掉原来的同类，换成裁过的
+    const others = out.patches.filter((p) => !kinds.includes(p.kind));
+    out.patches = [...others, ...kept];
+    const base = sel[0];
+    for (const q of outPieces) {
+      out.patches.push({ ring: q.outer, holes: q.holes, mat: base.mat, kind: base.kind, y: base.y });
+    }
+  };
+
+  const dbg = typeof process !== 'undefined' && process.env?.F3_DEBUG;
+  const areaOf = (list: PlanSurface[]): number => list.reduce((a, q) => a + M2(surfaceArea(q)), 0);
+  const lawn0 = areaOf(asSurf(pick(LAWN)));
+
+  const parking = asSurf(pick(['parking']));
+  carve(['pave'], parking);
+  const pave = asSurf(pick(['pave']));
+  carve(LAWN, [...parking, ...pave]);
+
+  const lawn1 = areaOf(asSurf(pick(LAWN)));
+  groundStats.lawnBefore += lawn0;
+  groundStats.lawnAfter += lawn1;
+  if (dbg && lawn0 > 1500 && lawn1 < lawn0 * 0.6) {
+    console.log(
+      `[gd] 草地被去重叠削掉：${lawn0.toFixed(0)} → ${lawn1.toFixed(0)} m² · ` +
+        `blockers 停车 ${parking.length} / 路 ${pave.length} · 路面积 ${areaOf(pave).toFixed(0)}`
+    );
+  }
+}
+
 function safeSubtract(a: PlanSurface[], b: PlanSurface[]): PlanSurface[] {
   if (b.length === 0) return a;
   const out: PlanSurface[] = [];
@@ -750,31 +1111,81 @@ export function parkGround(parcel: BuildingParcel, opts: GroundOpts): GroundOut 
   const out: GroundOut = { ...EMPTY, patches: [], stallLines: [], trees: [], props: [] };
   const ring = parcel.surface.outer;
   const c = centroid(ring);
-  out.patches.push({
-    ring,
-    holes: parcel.surface.holes,
-    mat: parcel.use === 'green' ? 'grass' : 'lawn',
-    kind: 'lawn',
-    y: 0.0115,
-  });
-  out.lawnM2 += areaM2(parcel.surface);
+  /**
+   * 先算"硬的两类"（园路 + 水塘），再让草地 = 地块 − 它们。
+   *
+   * 旧写法是"整块铺草，再把园路叠上去" —— 园路和草地就实打实地重叠了
+   * （实测全城 4900 m²）。用户要求这四类地面互不重叠，所以改成先减后铺。
+   */
+  const pathHard: PlanSurface[] = [];
+  const pondHard: PlanSurface[] = [];
 
-  // 十字园路（不是道路层：它是 park path，只做地面材质）
-  const ob = rectRing(c, U(2.2), U(Math.min(60, areaM2(parcel.surface) / 90)), 0);
-  for (const [w, h, ang] of [
-    [U(2.2), U(40), 0],
-    [U(2.2), U(40), Math.PI / 2],
-  ] as [number, number, number][]) {
-    const path = rectRing(c, w, h, ang);
-    const clipped = safeIntersect([{ outer: path, holes: [] }], [parcel.surface]);
-    for (const q of clipped) {
-      if (M2(surfaceArea(q)) < 10) continue;
-      out.patches.push({ ring: q.outer, mat: 'paver', kind: 'paving', y: 0.013 });
-      out.pavingM2 += M2(surfaceArea(q));
+  /**
+   * 园路：**每个公园 1~4 条，走向与弯曲各不相同**（用户：不要千篇一律的十字）。
+   *
+   * 做法是"有机切割"：在绿地内随机取一条**弦**（`clipLineToSurface` 求过场地的直线段），
+   * 再把这段直线用二次贝塞尔往外鼓一点（鼓量按长度与随机数取 8%~28%），
+   * 缓冲成 0.75 m 宽的带 —— 于是每条路都是"穿过绿地的曲线"，不是正交十字。
+   * 随机数来自公园自己的 seed，同一座城每次生成结果一致。
+   */
+  const pathW = U(0.75) / 2;
+  const pbb = bbox(ring);
+  const cx0 = (pbb.minX + pbb.maxX) / 2;
+  const cy0 = (pbb.minY + pbb.maxY) / 2;
+  const halfMin = Math.max(1, Math.min((pbb.maxX - pbb.minX) / 2, (pbb.maxY - pbb.minY) / 2));
+  const pathN = 1 + Math.floor(rng() * 4); // 1~4 条
+
+  const bezierPath = (a: Pt, ctrl: Pt, b: Pt): PlanSurface[] => {
+    const pts: Pt[] = [];
+    const N = 18;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const mt = 1 - t;
+      pts.push(
+        new Pt(
+          mt * mt * a.x + 2 * mt * t * ctrl.x + t * t * b.x,
+          mt * mt * a.y + 2 * mt * t * ctrl.y + t * t * b.y
+        )
+      );
     }
-  }
-  void ob;
+    const band = bufferPolyline(pts, pathW);
+    if (!band || band.length < 3) return [];
+    return safeIntersect([{ outer: cleanRing(band), holes: [] }], [parcel.surface]).filter(
+      (q) => M2(surfaceArea(q)) > 3
+    );
+  };
 
+  for (let i = 0; i < pathN; i++) {
+    // 每条路一个随机方向；第一条大致横向，后面的依次转开，避免全部重合
+    const ang = (i * Math.PI) / Math.max(2, pathN) + rng() * 0.8;
+    const off = (rng() - 0.5) * halfMin * 0.9;
+    const through = new Pt(
+      cx0 - Math.sin(ang) * off,
+      cy0 + Math.cos(ang) * off
+    );
+    const segs = clipLineToSurface(parcel.surface, through, ang);
+    if (segs.length === 0) continue;
+    // 取最长的那一段（穿过场地的整条弦）
+    const seg = segs.sort((a: Pt[], b: Pt[]) => {
+      const la = Pt.distance(a[0], a[a.length - 1]);
+      const lb = Pt.distance(b[0], b[b.length - 1]);
+      return lb - la;
+    })[0];
+    if (seg.length < 2) continue;
+    const a = seg[0];
+    const b = seg[seg.length - 1];
+    const len = Pt.distance(a, b);
+    if (len < U(8)) continue;
+    // 控制点：中点沿法向偏 8%~28%
+    const bow = (0.08 + rng() * 0.2) * len * (rng() < 0.5 ? -1 : 1);
+    const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
+    const nx = -(b.y - a.y) / len;
+    const ny = (b.x - a.x) / len;
+    const ctrl = new Pt(mid.x + nx * bow, mid.y + ny * bow);
+    for (const q of bezierPath(a, ctrl, b)) pathHard.push(q);
+  }
+
+  // 小水塘
   // 小水塘
   if (areaM2(parcel.surface) > 7000) {
     const r = U(9 + rng() * 6);
@@ -787,8 +1198,70 @@ export function parkGround(parcel: BuildingParcel, opts: GroundOpts): GroundOut 
     const clipped = safeIntersect([{ outer: pond, holes: [] }], [parcel.surface]);
     for (const q of clipped) {
       if (M2(surfaceArea(q)) < 30) continue;
-      out.patches.push({ ring: q.outer, mat: 'water', kind: 'water', y: 0.0125 });
+      pondHard.push(q);
     }
+  }
+
+  // 草地 = 地块 − （园路 + 水塘）
+  const hard: PlanSurface[] = [...pathHard, ...pondHard];
+  const lawnPieces: PlanSurface[] = [];
+  if (hard.length === 0) {
+    lawnPieces.push({ outer: ring, holes: parcel.surface.holes });
+  } else {
+    try {
+      const rest = surfaceSubtract([{ outer: ring, holes: parcel.surface.holes }], hard);
+      const before = areaM2(parcel.surface);
+      const after = rest.reduce((acc, q) => acc + M2(surfaceArea(q)), 0);
+      // 减法失败会原样返回（不抛异常）—— 那就干脆不铺草，露出硬质底
+      if (after < before * 0.995) lawnPieces.push(...rest);
+    } catch {
+      /* 同上：不铺草 */
+    }
+  }
+  for (const q of lawnPieces) {
+    const A = M2(surfaceArea(q));
+    if (A < 5) continue;
+    /**
+     * 被园路切开的绿地块**做圆角**（用户要求）。
+     *
+     * `roundDomain` 会把凸角切掉、凹角补圆，半径 1.6 m、每角 3 段 ——
+     * 切出来的绿地不再是"被直线劈开的三角形"，而是一块块圆润的草坪，
+     * 与园路的曲线边也更协调。
+     */
+    let piece = q;
+    if (A > 40) {
+      try {
+        const r = roundDomain(q, U(1.6), 3);
+        if (r.outer.length >= 3 && M2(surfaceArea(r)) > 20) {
+          /**
+           * 圆角会把**凹角补圆**（等于往园路里长一点），所以圆完必须再减一次园路，
+           * 否则草地会压到园路上（实测 103 m² 重叠）。
+           */
+          const bbR = bbox(r.outer);
+          const hit = hard.some((h) => {
+            const hb = bbox(h.outer);
+            return !(hb.minX > bbR.maxX || hb.maxX < bbR.minX || hb.minY > bbR.maxY || hb.maxY < bbR.minY);
+          });
+          if (hit) {
+            const cut = surfaceSubtract([r], hard).filter((x) => M2(surfaceArea(x)) > 15);
+            if (cut.length) piece = cut.sort((a2, b2) => M2(surfaceArea(b2)) - M2(surfaceArea(a2)))[0];
+          } else {
+            piece = r;
+          }
+        }
+      } catch {
+        /* 圆角失败就保留原形 */
+      }
+    }
+    out.patches.push({ ring: piece.outer, holes: piece.holes, mat: 'lawn', kind: 'lawn', y: 0.0115 });
+    out.lawnM2 += M2(surfaceArea(piece));
+  }
+  for (const q of pathHard) {
+    out.patches.push({ ring: q.outer, holes: q.holes, mat: 'lotPath', kind: 'pave', y: 0.013 });
+    out.pavingM2 += M2(surfaceArea(q));
+  }
+  for (const q of pondHard) {
+    out.patches.push({ ring: q.outer, holes: q.holes, mat: 'water', kind: 'water', y: 0.0125 });
   }
 
   // 树阵

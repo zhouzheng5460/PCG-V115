@@ -23,44 +23,33 @@ export function buildProp(p: PropFeature, baseY = 0.01): Primitive[] {
   const dirY = Math.sin(rot);
 
   switch (p.kind) {
-    // 树：树干 + **两层锥形树冠**（上锥尖朝上、下锥尖朝下，叠成一个八面体-like
-    // 的团块）。
+    // 树：**立方体树冠**（用户要求：所有植物换成方块树，只改形状，其他规则不变）。
     //
-    // 原来是"立方体 + 极细树干"。理由写的是"2D 和 3D 读同一张表"，
-    // 但那个理由只在**俯视图**成立：3D 里一棵棵绿方块，一个街区就是一堆
-    // 边长十米的绿色骰子，比没有树还难看（用户 3D 截图里最扎眼的就是它）。
-    // 换成两层锥之后：任何角度都是"一团树冠"，三角面数还从 12 降到 14 但
-    // 没有底面，顶点更少；俯视投影是圆形而不是方形，2D 反而更像树。
-    //
-    // 绿从 palette.TREE_GREENS 里按 seed 取，所以同一片林子深浅不一。
+    // 之前是"两层锥形树冠"，换成方块之后：位置、朝向、尺寸倍率、颜色（按 seed 取绿）
+    // 全部沿用原规则，只把树冠的几何从锥体换成长方体 —— 低多边形风格更统一，
+    // 面数也从 ~14 面降到 6 面。
     case 'tree': {
       const th = 0.42 * s;
       const g1 = treeGreen(p.seed);
       const cr = 0.4 * s;
-      const ch = 0.68 * s;
+      const ch = 0.84 * s;
       out.push(cylinder(c, 0.032 * s, y0, th, `${p.name}_t`, g, MAT.trunk, 3));
-      // 下半冠：尖朝下，把树冠底面收成锥形（不然从上往下看是个"平底锅"）
-      out.push(cone(c, cr * 0.74, y0 + th * 0.72, ch * 0.42, `${p.name}_c0`, g, g1, 7, false));
-      // 上半冠：尖朝上
-      out.push(cone(c, cr, y0 + th * 0.72 + ch * 0.16, ch, `${p.name}_c1`, g, g1, 7, true));
+      out.push(...box(c, cr * 2, cr * 2, y0 + th * 0.86, ch, rot, `${p.name}_c0`, g, g1));
       break;
     }
     case 'treeSmall': {
       const th = 0.28 * s;
       const g1 = treeGreen(p.seed);
       out.push(cylinder(c, 0.028 * s, y0, th, `${p.name}_t`, g, MAT.trunk, 3));
-      out.push(cone(c, 0.28 * s, y0 + th * 0.7, 0.5 * s, `${p.name}_c0`, g, g1, 6, false));
-      out.push(cone(c, 0.33 * s, y0 + th * 0.7 + 0.12 * s, 0.52 * s, `${p.name}_c1`, g, g1, 6, true));
+      out.push(...box(c, 0.62 * s, 0.62 * s, y0 + th * 0.8, 0.72 * s, rot, `${p.name}_c0`, g, g1));
       break;
     }
     case 'conifer': {
-      // 针叶树：细高的**单锥**，比圆叶树窄一圈、颜色更冷 —— 俯视投影是小圆，
-      // 在绿地上一眼能和圆叶树分开（原来是两层方块，3D 里是"绿色塔"）
+      // 针叶树：窄高的方块，仍比圆叶树细一圈、颜色更冷
       const th = 0.2 * s;
       const g1 = treeGreen(p.seed);
       out.push(cylinder(c, 0.026 * s, y0, th, `${p.name}_t`, g, MAT.trunk, 3));
-      out.push(cone(c, 0.44 * s, y0 + th * 0.7, 0.5 * s, `${p.name}_c0`, g, g1, 6, false));
-      out.push(cone(c, 0.28 * s, y0 + th * 0.7 + 0.1 * s, 1.0 * s, `${p.name}_c1`, g, g1, 6, true));
+      out.push(...box(c, 0.5 * s, 0.5 * s, y0 + th * 0.85, 1.0 * s, rot, `${p.name}_c0`, g, g1));
       break;
     }
     case 'lamp':

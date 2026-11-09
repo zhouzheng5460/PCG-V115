@@ -62,7 +62,39 @@ export function exportGLB(primitives: Primitive[], generator = 'townforge'): Glb
   const materials: unknown[] = [];
   const materialIndex = new Map<string, number>();
   const meshes: unknown[] = [];
-  const nodes: unknown[] = [];
+  /**
+   * 节点树：**按 `prim.path` 建目录**。
+   *
+   * 之前所有 mesh 都平铺在场景根下 —— 一座城 2000+ 个节点全是同级，
+   * 进 Blender 只能看到一长串 `B12-T1-P3_house_0`，没法按"街道 / 街区 / 建筑"操作。
+   * 现在按 `城市 / 街道 / 街区 / B12 / 建筑` 建组节点，mesh 挂在最深层。
+   * 组节点只有 `children`，叶子节点只有 `mesh` —— 这是 glTF 允许的写法。
+   */
+  interface NodeDef {
+    name: string;
+    children?: number[];
+    mesh?: number;
+    extras?: Record<string, unknown>;
+  }
+  const nodes: NodeDef[] = [];
+  const groupOf = new Map<string, number>();
+  const ROOT = '城市';
+  const ensurePath = (path: string[]): number => {
+    let key = '';
+    let parent = -1;
+    for (const seg of [ROOT, ...path]) {
+      key = key ? `${key}/${seg}` : seg;
+      let idx = groupOf.get(key);
+      if (idx === undefined) {
+        idx = nodes.length;
+        nodes.push({ name: seg, children: [] });
+        groupOf.set(key, idx);
+        if (parent >= 0) nodes[parent].children!.push(idx);
+      }
+      parent = idx;
+    }
+    return parent;
+  };
 
   for (const prim of valid) {
     const pos = new Float32Array(prim.positions);
@@ -113,13 +145,17 @@ export function exportGLB(primitives: Primitive[], generator = 'townforge'): Glb
       ],
     });
 
-    nodes.push({ mesh: meshes.length - 1, name: prim.name, extras: { group: prim.group } });
+    const parent = ensurePath(prim.path ?? ['未分组']);
+    const leaf = nodes.length;
+    nodes.push({ mesh: meshes.length - 1, name: prim.name, extras: { group: prim.group, path: (prim.path ?? []).join('/') } });
+    nodes[parent].children!.push(leaf);
   }
 
   const gltf = {
     asset: { version: '2.0', generator },
     scene: 0,
-    scenes: [{ nodes: nodes.map((_, i) => i) }],
+    // 场景根只挂"城市"这一个节点，其余全在它的子树里
+    scenes: [{ nodes: [groupOf.get(ROOT)!] }],
     nodes,
     meshes,
     materials,

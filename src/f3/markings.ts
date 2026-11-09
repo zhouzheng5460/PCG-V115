@@ -305,6 +305,14 @@ function spanRect(at: Pt, dir: Pt, u0: number, u1: number, v0: number, v1: numbe
  */
 export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: MarkingOptions): MarkingResult {
   const out: MarkSeg[] = [];
+  const tc = typeof process !== 'undefined' && process.env?.F3_TC;
+  let tMark = Date.now();
+  const lap = (tag: string): void => {
+    if (!tc) return;
+    const now = Date.now();
+    console.log(`[mk] ${tag} ${now - tMark} ms  segs=${out.length}`);
+    tMark = now;
+  };
   const { secOf, jApp, faces } = opts;
   /** 每个路口每个进口允许的转向（lane 分配用） */
   const mvsOf = new Map<string, Turn[]>();
@@ -590,6 +598,7 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
 
   // ---------------- ④ 路口内的路缘石边线（沿转角圆弧）
   out.push(...junctionEdgeMarks(opts.jArcs ?? []));
+  lap('①-④ 生成');
 
   if (typeof process !== 'undefined' && process.env?.F3_MK) {
     const c = new Map<string, number>();
@@ -597,6 +606,7 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
     console.log('[mk raw]', JSON.stringify(Object.fromEntries(c)));
   }
   const clipped = clipMarksToAsphalt(out, asphalt);
+  lap('裁到沥青');
   /**
    * 最后一道裁剪把**路口面**和**人行横道占位**一起从普通标线里减掉。
    *
@@ -606,6 +616,7 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
    */
   const blockers = [...(opts.blockers ?? []), ...crossZones];
   const segs = blockers.length ? clearJunction(clipped, blockers) : clipped;
+  lap('让开路口');
   return { segs, crossings, eligible: eligible.length };
 }
 
@@ -622,7 +633,8 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
 function junctionEdgeMarks(arcs: Pt[][]): MarkSeg[] {
   const out: MarkSeg[] = [];
   for (const arc of arcs) {
-    if (arc.length < 3) continue;
+    // 2 点也算（路口转角边线现在按边拆成短直段，弧长由调用方控制）
+    if (arc.length < 2) continue;
     const ring = band(arc, 0, polyLen(arc), 0, LW);
     if (ring) out.push({ ring, yellow: false, kind: 'jedge' });
   }
@@ -748,15 +760,206 @@ function rectRing(c: Pt, halfL: number, halfW: number, ang: number): Pt[] {
 }
 
 /**
+ * 车行面**边界边**的均匀网格索引。
+ *
+ * 为什么需要它：`clipMarksToAsphalt` 原来对每条标线都做一次 `surfaceIntersect`，
+ * 而车行面里有一片是整张主路网并出来的大面（实测 **3179 个顶点**）——
+ * 一次布尔要 20 ms，4774 段标线 × 平均 1.5 片 = **65 s**，整座城 90 s。
+ *
+ * 而 99% 的标线本来就整条落在车行面内部（它们是按车道模型偏移出来的），
+ * 根本不需要布尔。所以先用"有没有边界边穿过这条标线"来判断：
+ *   · 没有穿过 → 要么整条在里、要么整条在外，查一个点内测试即可，零布尔；
+ *   · 有穿过   → 才走原来的布尔裁剪（跨路缘、跨路口的少数情况）。
+ * 边按 4 世界单位（≈28 m）的格子入桶，一次查询只看附近几个格子的边。
+ */
+class AsphaltBoundaryIndex {
+  private readonly cell = 4;
+  private readonly grid = new Map<number, number[]>();
+  private readonly ax: number[] = [];
+  private readonly ay: number[] = [];
+  private readonly bx: number[] = [];
+  private readonly by: number[] = [];
+  /** 每条边的包围盒（预计算：同一条边会被几百段标线反复问到） */
+  private readonly eMinX: number[] = [];
+  private readonly eMaxX: number[] = [];
+  private readonly eMinY: number[] = [];
+  private readonly eMaxY: number[] = [];
+  /** 每条边属于哪一片车行面（点内测试要按片做奇偶） */
+  private readonly ePiece: number[] = [];
+  /** y 带索引：点内测试只扫过该点所在横带的边（射线法） */
+  private readonly yBands = new Map<number, number[]>();
+
+  constructor(list: PlanSurface[]) {
+    list.forEach((s, pi) => {
+      this.addRing(s.outer, pi);
+      for (const h of s.holes) this.addRing(h, pi);
+    });
+  }
+
+  private static key(ix: number, iy: number): number {
+    return (ix + 4096) * 8192 + (iy + 4096);
+  }
+
+  /** 世界坐标 → 格子键（供外部按格缓存判定结果） */
+  static cellKey(x: number, y: number, cell: number): number {
+    return AsphaltBoundaryIndex.key(Math.floor(x / cell), Math.floor(y / cell));
+  }
+
+  private addRing(ring: Pt[], piece: number): void {
+    const c = this.cell;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      const id = this.ax.length;
+      this.ax.push(a.x);
+      this.ay.push(a.y);
+      this.bx.push(b.x);
+      this.by.push(b.y);
+      const mnX = Math.min(a.x, b.x);
+      const mxX = Math.max(a.x, b.x);
+      const mnY = Math.min(a.y, b.y);
+      const mxY = Math.max(a.y, b.y);
+      this.eMinX.push(mnX);
+      this.eMaxX.push(mxX);
+      this.eMinY.push(mnY);
+      this.eMaxY.push(mxY);
+      this.ePiece.push(piece);
+
+      for (let ix = Math.floor(mnX / c); ix <= Math.floor(mxX / c); ix++) {
+        for (let iy = Math.floor(mnY / c); iy <= Math.floor(mxY / c); iy++) {
+          const k = AsphaltBoundaryIndex.key(ix, iy);
+          const bin = this.grid.get(k);
+          if (bin) bin.push(id);
+          else this.grid.set(k, [id]);
+        }
+      }
+      for (let iy = Math.floor(mnY / c); iy <= Math.floor(mxY / c); iy++) {
+        const bin = this.yBands.get(iy);
+        if (bin) bin.push(id);
+        else this.yBands.set(iy, [id]);
+      }
+    }
+  }
+
+  /** 有没有沥青边界边与这条标线的任一条边相交 */
+  crosses(ring: Pt[], bb: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
+    const c = this.cell;
+    const x0 = Math.floor(bb.minX / c);
+    const x1 = Math.floor(bb.maxX / c);
+    const y0 = Math.floor(bb.minY / c);
+    const y1 = Math.floor(bb.maxY / c);
+    const seen = new Set<number>();
+    for (let ix = x0; ix <= x1; ix++) {
+      for (let iy = y0; iy <= y1; iy++) {
+        const bin = this.grid.get(AsphaltBoundaryIndex.key(ix, iy));
+        if (!bin) continue;
+        for (let k = 0; k < bin.length; k++) {
+          const id = bin[k];
+          if (seen.has(id)) continue;
+          seen.add(id);
+          if (this.hitAny(id, ring)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 点是否落在这些车行面片的并集里（射线法 + y 带索引）。
+   *
+   * 为什么不用 `insideSurface`：那片主路网有 3179 个顶点，一次要 0.18 ms，
+   * 全城上万段标线就是好几秒。这里只扫点所在横带（4 单位 ≈ 28 m）的边，
+   * 每条边只做一次乘法比较，实测快 20 倍以上。
+   */
+  insideAny(p: Pt, pieces: number[]): boolean {
+    const band = this.yBands.get(Math.floor(p.y / this.cell));
+    if (!band) return false;
+    for (const piece of pieces) {
+      let inside = false;
+      for (let k = 0; k < band.length; k++) {
+        const id = band[k];
+        if (this.ePiece[id] !== piece) continue;
+        const ay = this.ay[id];
+        const by = this.by[id];
+        if (ay > p.y === by > p.y) continue;
+        const ax = this.ax[id];
+        const t = (p.y - ay) / (by - ay || 1e-12);
+        if (ax + (this.bx[id] - ax) * t > p.x) inside = !inside;
+      }
+      if (inside) return true;
+    }
+    return false;
+  }
+
+  private hitAny(id: number, ring: Pt[]): boolean {
+    const minX = this.eMinX[id];
+    const maxX = this.eMaxX[id];
+    const minY = this.eMinY[id];
+    const maxY = this.eMaxY[id];
+    const p1x = this.ax[id];
+    const p1y = this.ay[id];
+    const p2x = this.bx[id];
+    const p2y = this.by[id];
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      // 标线边与这条边界边的包围盒不相交就跳过（绝大多数情况在这里出局）
+      if (Math.max(a.x, b.x) < minX || Math.min(a.x, b.x) > maxX) continue;
+      if (Math.max(a.y, b.y) < minY || Math.min(a.y, b.y) > maxY) continue;
+      if (segCross(a, b, p1x, p1y, p2x, p2y)) return true;
+    }
+    return false;
+  }
+}
+
+/** 线段相交（含共线重叠；端点相接算相交 —— 宁可多走一次布尔，也不留悬空标线） */
+function segCross(a: Pt, b: Pt, cx: number, cy: number, dx: number, dy: number): boolean {
+  const d1 = cross3(cx, cy, dx, dy, a.x, a.y);
+  const d2 = cross3(cx, cy, dx, dy, b.x, b.y);
+  const d3 = cross3(a.x, a.y, b.x, b.y, cx, cy);
+  const d4 = cross3(a.x, a.y, b.x, b.y, dx, dy);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  const eps = 1e-9;
+  const on = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): boolean =>
+    Math.abs(cross3(qx, qy, rx, ry, px, py)) < eps &&
+    px >= Math.min(qx, rx) - eps &&
+    px <= Math.max(qx, rx) + eps &&
+    py >= Math.min(qy, ry) - eps &&
+    py <= Math.max(qy, ry) + eps;
+  return on(a.x, a.y, cx, cy, dx, dy) || on(b.x, b.y, cx, cy, dx, dy) || on(cx, cy, a.x, a.y, b.x, b.y) || on(dx, dy, a.x, a.y, b.x, b.y);
+}
+
+function cross3(ax: number, ay: number, bx: number, by: number, px: number, py: number): number {
+  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+}
+
+/**
  * 标线裁到车行面内。
  *
  * 只按包围盒挑出可能相交的几块路面求交 —— 全城几千条标线，每条都跟整张
  * 路网做布尔会把这一步从 0.2 s 拖到十几秒。
+ *
+ * 在此之上还有一条**零布尔快路径**（见 `AsphaltBoundaryIndex`）：先用边界边
+ * 索引判断这条标线有没有跨出车行面，没有跨就只做一次点内测试。
  */
 function clipMarksToAsphalt(marks: MarkSeg[], asphalt: PlanSurface[]): MarkSeg[] {
   if (asphalt.length === 0) return marks;
-  const boxes = asphalt.map((q) => ({ q, b: bboxOf(q.outer) }));
+  const boxes = asphalt.map((q) => bboxOf(q.outer));
+  const boundary = new AsphaltBoundaryIndex(asphalt);
+  /** 与给定包围盒相交的车行面片下标（平均只有 1.5 片） */
+  const nearOf = (b: { minX: number; minY: number; maxX: number; maxY: number }): number[] => {
+    const out: number[] = [];
+    for (let i = 0; i < boxes.length; i++) {
+      const ab = boxes[i];
+      if (ab.minX > b.maxX || ab.maxX < b.minX || ab.minY > b.maxY || ab.maxY < b.minY) continue;
+      out.push(i);
+    }
+    return out;
+  };
+  const patchCache = new Map<number, boolean>();
   const out: MarkSeg[] = [];
+  let fast = 0;
+  let slow = 0;
   for (const m of marks) {
     /**
      * 箭头**不参与碎片化裁剪**：它是 3 m × 0.3 m 的细条，一旦跨在沥青面的
@@ -780,18 +983,58 @@ function clipMarksToAsphalt(marks: MarkSeg[], asphalt: PlanSurface[]): MarkSeg[]
     }
     if (m.kind === 'arrow') {
       const c = centroid(m.ring);
-      const inside = asphalt.some((q) => {
-        const bb = bboxOf(q.outer);
-        return !(bb.minX > c.x || bb.maxX < c.x || bb.minY > c.y || bb.maxY < c.y) && insideSurface(c, q);
-      });
-      if (inside) out.push(m);
+      if (boundary.insideAny(c, nearOf({ minX: c.x, minY: c.y, maxX: c.x, maxY: c.y }))) out.push(m);
       continue;
     }
     const b = bboxOf(m.ring);
-    const near = boxes.filter(({ b: ab }) => !(ab.minX > b.maxX || ab.maxX < b.minX || ab.minY > b.maxY || ab.maxY < b.minY));
+    const near = nearOf(b);
     if (near.length === 0) continue;
+    /**
+     * 小标线快路径（虚线 / 斑马线条 / 停止线 / 箭头 / 减速线，全城占八成）：
+     * 尺寸只有几米，逐顶点判内外就够了 —— 一条 15 cm × 1.5 m 的白条不可能
+     * "四个角都在沥青里、中间却跨出车行面"。**不**做线段相交测试，
+     * 那一步才是这一步 4 s 的真正开销来源（长标线的环有 80 个点，
+     * 每个点都要跟附近几十条边界边比一遍）。
+     */
+    const small = b.maxX - b.minX < U(6) && b.maxY - b.minY < U(6);
+    if (small) {
+      let inCnt = 0;
+      for (const p of m.ring) if (boundary.insideAny(p, near)) inCnt++;
+      if (inCnt === m.ring.length) {
+        fast++;
+        out.push(m);
+        continue;
+      }
+      if (inCnt === 0 && !boundary.insideAny(centroid(m.ring), near)) {
+        // 整条都在车行面外：直接丢（这一档原来是"布尔之后被裁空"，结果一样）
+        fast++;
+        continue;
+      }
+      // 只有部分顶点在里：老老实实做布尔（全城不到 10 段）
+    } else if (!boundary.crosses(m.ring, b)) {
+      /**
+       * 长标线快路径：没有沥青边界边穿过它 → 它要么整条在车行面里、要么整条在外，
+       * 一个点内测试就能定，完全不需要布尔。
+       */
+      fast++;
+      const c = centroid(m.ring);
+      /**
+       * 点内测试本身也不便宜（3179 顶点的车行面一片要 0.18 ms），而几百段虚线
+       * 常常落在同一个 2 单位的格子里 —— 按格缓存，命中率约八成。
+       */
+      const ck = AsphaltBoundaryIndex.cellKey(c.x, c.y, 2);
+      let inside = patchCache.get(ck);
+      if (inside === undefined) {
+        inside = boundary.insideAny(c, near);
+        patchCache.set(ck, inside);
+      }
+      if (inside) out.push(m);
+      continue;
+    }
+    slow++;
     let kept = false;
-    for (const { q } of near) {
+    for (const qi of near) {
+      const q = asphalt[qi];
       try {
         const hit = surfaceIntersect([{ outer: m.ring, holes: [] }], [q]);
         for (const h of hit) {
@@ -803,7 +1046,10 @@ function clipMarksToAsphalt(marks: MarkSeg[], asphalt: PlanSurface[]): MarkSeg[]
         /* 单片布尔失败就换下一片，不整条丢 */
       }
     }
-    if (!kept && near.some(({ q }) => insideSurface(centroid(m.ring), q))) out.push(m);
+    if (!kept && boundary.insideAny(centroid(m.ring), near)) out.push(m);
+  }
+  if (typeof process !== 'undefined' && process.env?.F3_TC) {
+    console.log(`[mk] 裁剪：快路径 ${fast} / 布尔 ${slow} → 保留 ${out.length}`);
   }
   return out;
 }

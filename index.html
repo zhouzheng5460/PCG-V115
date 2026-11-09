@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TownForge — 可编辑城市生成器</title>
+    <title>TownForge — F3 城市生成器</title>
   </head>
   <body>
     <div id="app">
@@ -11,60 +11,41 @@
         <div class="brand">
           <span class="logo">◈</span>
           <span>TownForge</span>
-          <em>张量场城市生成器</em>
-        </div>
-        <div class="views">
-          <button class="tab active" data-view="2d">平面编辑</button>
-          <button class="tab" data-view="3d">三维预览</button>
+          <em>F3 规则城市</em>
         </div>
         <!--
-          生成模式：
-            legacy  = 现有链路（Voronoi 地块 + 地块内容）
-            planner = Planner 接管三类地块（工业 / 多层住宅 / 零售）
-            f3      = 规则驱动的城市合成器（城市边界 → 路网 → 街区 → 地块 → 建筑 → 地面）
+          两个页签 = 两套相机（同一个场景、同一份几何）：
+            persp = 透视 + 阴影（三维预览）
+            top   = 正交俯视 + 关阴影（原来的"平面编辑"）
+          选中 / 高亮 / 禁区 / 方向线都在三维场景里，两边看到的是同一个东西。
         -->
-        <div class="modes" id="modes" title="生成模式">
-          <button class="mode-btn active" data-mode="legacy">Legacy</button>
-          <button class="mode-btn" data-mode="planner">Planner</button>
-          <button class="mode-btn" data-mode="f3">F3 城市</button>
-        </div>
-        <!-- F3 的城市风貌条（只在 F3 模式下出现） -->
-        <div class="modes f3-modes" id="f3-modes" hidden title="F3 城市风貌">
-          <span class="f3-tag">风貌</span>
-          <button class="f3-chip active" data-f3="style" data-v="structured">规则</button>
-          <button class="f3-chip" data-f3="style" data-v="organic">有机</button>
-          <button class="f3-chip" data-f3="style" data-v="campus">园区</button>
-          <span class="f3-sep"></span>
-          <span class="f3-tag">用途</span>
-          <button class="f3-chip active" data-f3="program" data-v="mixed">混合</button>
-          <button class="f3-chip" data-f3="program" data-v="residential">居住</button>
-          <button class="f3-chip" data-f3="program" data-v="commercial">商业</button>
-          <button class="f3-chip" data-f3="program" data-v="industrial">工业</button>
-          <span class="f3-sep"></span>
-          <span class="f3-tag">密度</span>
-          <button class="f3-chip" data-f3="density" data-v="low">低</button>
-          <button class="f3-chip active" data-f3="density" data-v="medium">中</button>
-          <button class="f3-chip" data-f3="density" data-v="high">高</button>
+        <div class="views">
+          <button class="tab active" data-view="persp">透视</button>
+          <button class="tab" data-view="top">顶视</button>
         </div>
         <div class="actions">
-          <button id="btn-export" class="primary">导出 GLB</button>
+          <button id="btn-fit" class="ghost">全城</button>
+          <button id="btn-export-top" class="primary">导出 GLB</button>
         </div>
       </header>
 
       <div id="body">
-        <!-- 左：显示控制 + HUD 分析（看图时最常动的两件事） -->
         <aside id="leftbar"></aside>
 
         <main id="stage">
-          <canvas id="canvas2d"></canvas>
           <div id="view3d"></div>
+          <!-- 编辑与重建分离：改禁区 / 方向线 / 街区覆盖只改状态，按这里才真重建 -->
+          <div id="applybar">
+            <span class="txt"></span>
+            <button id="btn-apply" class="primary">应用并重建</button>
+            <button id="btn-discard" class="ghost">放弃</button>
+          </div>
           <div id="hint"></div>
           <div id="stats"></div>
-          <!-- R8 · Planner Debug HUD -->
-          <div id="planner-hud"></div>
+          <div id="busy"></div>
+          <div id="notes"></div>
         </main>
 
-        <!-- 右：属性面板（生成参数，调完就不再动） -->
         <aside id="rightbar"></aside>
       </div>
     </div>

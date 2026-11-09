@@ -5,20 +5,22 @@
 // 任何一步做不出来，都在 `notes` 里留一句人话说明降级到了什么，不静默当成功。
 
 import { Pt } from '../core/geom';
-import { surfaceArea, surfaceSubtract, type PlanSurface } from '../town/planning/core/surface';
+import { surfaceArea, surfaceIntersect, surfaceOffset, surfaceSubtract, type PlanSurface } from '../town/planning/core/surface';
 import { makeRng } from '../town/planning/subdivision/geom';
 import type { LandUse, LotInfo, PathFeature, PropFeature, Scene, SolidFeature, SurfaceFeature } from '../scene/types';
 import { emptyScene } from '../scene/types';
+import type { MatKey } from '../scene/palette';
 import { buildBlocks, centroidOf, frontRadOf, nearestPath, splitParcels } from './blocks';
 import { buildParcelTensor, splitBlockByTensor, type TensorRegion, type TensorSplit } from './tensorsplit';
 import { footprintOf, maxInscribedRect, realizeBuildings } from './build';
 import { realizeLayout } from './layout';
 import { buildLandUseField } from './landuse';
-import { M2, U, areaM2, polyLen } from './geom';
-import { groundForParcel, parkGround, treeProp } from './ground';
+import { M2, U, areaM2, cleanRing, polyLen } from './geom';
+import { groundForParcel, groundStats, parkGround, treeProp } from './ground';
 import { buildRoadGeom, unionPolys, type RoadGeom } from './roadgeom';
 import { growStreets } from './grow';
 import { growStreetsTensor } from './tensorgrow';
+import { applyZonesToCity } from './zoneapply';
 import {
   DENSITY_PRESETS,
   STYLE_PRESETS,
@@ -53,13 +55,26 @@ export interface CityResult {
   notes: string[];
 }
 
-export function runF3City(spec: CitySpec): CityResult {
+export function runF3City(input: CitySpec): CityResult {
   const t0 = Date.now();
   const notes: string[] = [];
+  /**
+   * 场地边界（**未扣禁区**）：底盘、面积账、禁区铺装都用它。
+   * 生成边界（`spec.boundary`）会被禁区扣掉，见 `planZones()`。
+   */
+  const siteBoundary = input.boundary;
+  let spec = input;
   const preset = STYLE_PRESETS[spec.style];
   const dense = DENSITY_PRESETS[spec.density];
   const heightScale = spec.heightScale ?? 1;
   const rng = makeRng(spec.seed, 'f3city');
+
+  /**
+   * 禁区**不参与生成**：它改到生成之后做局部后处理（见 `zoneapply.ts`）。
+   *
+   * 以前是在这里把禁区从城市边界里扣掉，结果"动一块禁区 → 整城重算 2~6 s"，
+   * 而且路网会因为边界变了而整体重排。现在路网完全不受禁区影响。
+   */
 
   // 注意：浏览器里没有 `process`。写 `process.env.F3_DEBUG` 会让整条链路在页面上
   // 直接 ReferenceError（Node 里跑得好好的脚本，一进浏览器就白屏，这是最常见的坑）。
@@ -100,6 +115,30 @@ export function runF3City(spec: CitySpec): CityResult {
   notes.push(...blockRes.notes);
   clock('blocks');
 
+  /**
+   * 人工覆盖：先把"地块类型"落到街区上，再做切分 ——
+   * 切分尺度是由 block.use 查表决定的（住宅 420~700 m²、工业 3200~6000 m²），
+   * 先改用途再切，地块尺度才跟着变。切完再改用途只会得到"商业用途的住宅尺度地块"。
+   */
+  const overrides = spec.blockOverrides ?? {};
+  const reservedIds = new Set<string>();
+  let useOverrideN = 0;
+  for (const b of blockRes.blocks) {
+    const ov = overrides[b.id];
+    if (!ov?.use) continue;
+    useOverrideN++;
+    if (ov.use === 'reserved') {
+      reservedIds.add(b.id);
+      // 保留地按"公园"的切分规则走（整块不切），但地面铺硬地、不排建筑
+      b.use = 'park';
+      b.why = '人工指定：保留地（不盖楼、铺硬地）';
+    } else {
+      b.use = ov.use;
+      b.why = `人工指定用途：${ov.use}`;
+    }
+  }
+  if (useOverrideN) notes.push(`人工覆盖 ${useOverrideN} 个街区的地块类型`);
+
   stage('③ 街区');
   // ---------------- ④ 地块 + 建筑 + 地面
   //
@@ -111,6 +150,27 @@ export function runF3City(spec: CitySpec): CityResult {
   const field = buildLandUseField(spec, preset, streets.graph);
   const parcelTensor = buildParcelTensor(spec, streets.graph, streets.axisRad);
   const splits = blockRes.blocks.map((block) => {
+    /**
+     * 人工指定了"切分数量"的街区：**跳过张量一级切分**，整块直接进二级切分。
+     *
+     * 不跳的话，一级先把街区切成 3~5 个大分区，每个分区再切 N 块，
+     * 面板上填 4 会得到 17 块 —— 数字对不上，用户没法用。
+     * 跳过之后 "N" 就是这块地的目标块数（二叉分割按面积逼近，实测量级 ±30%）。
+     */
+    const ov0 = overrides[block.id];
+    if (ov0?.parcels && ov0.parcels > 0) {
+      const whole: TensorSplit = { regions: [], lanes: [], seams: [], notes: [] };
+      const s = splitParcels(
+        block,
+        preset,
+        dense.parcelScale,
+        spec.seed,
+        spec.buildMode ?? 'binary',
+        block.id,
+        { axisRad: ov0.axisRad, parcels: ov0.parcels }
+      );
+      return { block, first: whole, split: s };
+    }
     const first: TensorSplit = splitBlockByTensor(block, parcelTensor, spec, preset);
     const second = first.regions.map((region, i) => {
       // 分区带一个由张量场给出的主轴向；二级切分仍走原来的 splitParcels，
@@ -122,7 +182,16 @@ export function runF3City(spec: CitySpec): CityResult {
         areaM2: region.areaM2,
         frontRad: region.axisRad,
       };
-      const s = splitParcels(regionBlock, preset, dense.parcelScale, spec.seed, spec.buildMode ?? 'binary', `${block.id}-T${i + 1}`);
+      const ov = overrides[block.id];
+      const s = splitParcels(
+        regionBlock,
+        preset,
+        dense.parcelScale,
+        spec.seed,
+        spec.buildMode ?? 'binary',
+        `${block.id}-T${i + 1}`,
+        ov ? { axisRad: ov.axisRad, parcels: ov.parcels } : undefined
+      );
       return s;
     });
     return {
@@ -140,6 +209,18 @@ export function runF3City(spec: CitySpec): CityResult {
     blockRes.blocks
   );
   notes.push(...landUse.notes);
+  /**
+   * landuse.assign 会按"竞租概率"重写每个地块的用途，人工指定的用途必须**在它之后**
+   * 再盖一次，否则面板上选了"工业"、画面上还是住宅。只改用途，不动任何几何。
+   */
+  for (const { split } of splits) {
+    for (const p of split.parcels) {
+      const ov = overrides[p.blockId];
+      if (!ov?.use) continue;
+      p.use = ov.use === 'reserved' ? 'park' : ov.use;
+      p.useWhy = '人工指定';
+    }
+  }
   // 子地块的临街方向必须按**它自己**离哪条路最近来定。一级分区内靠内侧的
   // 地块往往面向另一条街，整块分区共用一个 axisRad 会把「临街低 / 内侧高」
   // 和高度带判反。切分已经完成，这里只改正方向，不动任何切分几何。
@@ -169,6 +250,8 @@ export function runF3City(spec: CitySpec): CityResult {
   let trees = 0;
   let footprintArea = 0;
   let gfa = 0;
+  /** 阶段④的分项耗时（F3_TC 时打印）：布局 / 地面 / 其余 */
+  const prof = { layout: 0, ground: 0, park: 0 };
 
   /**
    * 街区切分丢下的 <60 m² 碎渣也是「场地 − 路网面」的一部分。
@@ -189,6 +272,27 @@ export function runF3City(spec: CitySpec): CityResult {
   });
 
   for (const { block, split, first } of splits) {
+    /**
+     * L0 · 硬质底：**整个街区面**原样铺一层硬质铺装，不做任何布尔。
+     *
+     * 这是地面结构的第 0 层：上面再叠草地 / 停车场地坪 / 水面 / 内部路。
+     * 三个理由：
+     *   ① 任何上层（草地、停车、通路）算失败或算漏，露出来的是硬质铺装，
+     *      而不是底色或黑洞 —— "地块缺一块"从结构上不可能再发生；
+     *   ② 街区边界已经是路网圆角化之后的面，天然贴着人行道，不需要再裁；
+     *   ③ 免掉原来"兜底把边角补成草地"的一堆小布尔（那些碎片还常常补不上）。
+     * y 取全场地最低（0.0095），保证任何地物都压在它上面，不打架。
+     */
+    scene.surfaces.push({
+      name: `${block.id}_base`,
+      group: `lot/${block.use}`,
+      ring: block.surface.outer,
+      holes: block.surface.holes,
+      mat: 'lotBase',
+      y: 0.0095,
+      role: 'ground',
+    });
+
     /** 这个街区已经认领的地块面（用来兜底收边角） */
     const claimedByBlock: PlanSurface[] = [];
     let blockBuildings = 0;
@@ -204,15 +308,18 @@ export function runF3City(spec: CitySpec): CityResult {
      * 所以建筑不会压在上面。
      */
     let laneArea = 0;
+    /** 街区级步行街（也是"地块通路"这一类），要参与每个地块的地面避让 */
+    const laneSurfaces: PlanSurface[] = [];
     first.lanes.forEach((lane, i) => {
       laneArea += M2(surfaceArea(lane));
       claimedByBlock.push(lane);
+      laneSurfaces.push({ outer: lane.outer, holes: lane.holes ?? [] });
       scene.surfaces.push({
         name: `${block.id}_tensor_walk_${i}`,
-        group: 'lot/internal',
+        group: `lot/${block.use}`,
         ring: lane.outer,
         holes: lane.holes,
-        mat: 'stonePave',
+        mat: 'lotPath',
         y: 0.0126,
         role: 'ground',
       });
@@ -222,6 +329,25 @@ export function runF3City(spec: CitySpec): CityResult {
     for (const parcel of split.parcels) {
       parcelArea += parcel.areaM2;
       claimedByBlock.push(parcel.surface);
+      /**
+       * 保留地：整块铺硬地，不排建筑、不排停车、不种树。
+       * 它跟禁区不是一回事 —— 禁区在生成前就把边界挖掉了（路网绕行），
+       * 保留地是"路网照旧、这块地空着"，用来手动留出广场 / 待建地。
+       */
+      if (reservedIds.has(block.id)) {
+        scene.surfaces.push({
+          name: `${parcel.id}_reserved`,
+          group: 'lot/reserved',
+          ring: parcel.surface.outer,
+          holes: parcel.surface.holes,
+          mat: 'lotBase',
+          y: 0.0126,
+          role: 'ground',
+        });
+        parcelsOut.push({ ...parcel, rect: null, footprint: null, note: '保留地：铺硬地，不盖楼' });
+        continue;
+      }
+
       // 太小的地块放不下建筑：当绿地处理（不丢，账才闭得上）
       const isPark = parcel.use === 'park' || parcel.use === 'green' || parcel.areaM2 < 80;
       const groundOpts = { preset, seed: spec.seed, entrances: [] as Pt[], heightScale };
@@ -241,9 +367,10 @@ export function runF3City(spec: CitySpec): CityResult {
        * 地块本身由 `splitParcels` 的二叉分割给出。
        */
       if ((spec.buildMode ?? 'binary') === 'binary') {
+        const _tLayout = Date.now();
         const bb = realizeLayout(parcel, {
           density: spec.density,
-          heightScale,
+          heightScale: heightScale * (overrides[block.id]?.heightScale ?? 1),
           centerDist: block.centerDist,
           access: parcel.access,
           localIntensity: parcel.localIntensity,
@@ -252,18 +379,28 @@ export function runF3City(spec: CitySpec): CityResult {
           coverage: preset.coverage,
           seed: spec.seed,
         });
+        prof.layout += Date.now() - _tLayout;
         for (const s of bb.solids) {
           scene.solids.push(s);
           footprintArea += M2(surfaceArea({ outer: s.ring, holes: [] }));
         }
-        // 内部路网/步行街：与马路牙子等高，只铺在地块内部，不进路面层
+        /**
+         * 内部路网 / 步行街：**属于"地块通路"这一类**（不是停车坪、也不是自有颜色）。
+         *
+         * 之前用 `asphaltLot`（同一个材质当停车坪）+ `stonePave`（步行），于是
+         *   · 它被算进"停车场地坪"，跟草地对不上账（实测重叠 3.4 万 m²）；
+         *   · 地块里出现第四、第五种颜色。
+         * 现在统一 `lotPath`，并且把它们的面**回传给地面计算**去避让（见 groundOpts.innerRoads）。
+         */
+        const innerRoadSurfaces: PlanSurface[] = [];
         for (const ir of bb.innerRoads) {
+          innerRoadSurfaces.push({ outer: ir.surface.outer, holes: ir.surface.holes ?? [] });
           scene.surfaces.push({
             name: `${parcel.id}_inner_${ir.kind}`,
             group: `lot/${parcel.use}`,
             ring: ir.surface.outer,
             holes: ir.surface.holes,
-            mat: ir.kind === 'walk' ? 'stonePave' : 'asphaltLot',
+            mat: 'lotPath',
             y: 0.0126,
             role: 'ground',
           });
@@ -288,11 +425,14 @@ export function runF3City(spec: CitySpec): CityResult {
           }
           entrances.push(best);
         }
+        const _tGround = Date.now();
         const g = groundForParcel(parcel, null, bb.frontRing, bb.footprints, {
           ...groundOpts,
           entrances,
           courtyard: bb.courtyard,
+          innerRoads: innerRoadSurfaces,
         });
+        prof.ground += Date.now() - _tGround;
         pushGround(scene, g, parcel);
         blockBays += g.bays;
         blockTrees += g.trees.length;
@@ -324,7 +464,7 @@ export function runF3City(spec: CitySpec): CityResult {
 
       const b = realizeBuildings(parcel, footprint, {
         density: spec.density,
-        heightScale,
+        heightScale: heightScale * (overrides[block.id]?.heightScale ?? 1),
         rng,
         centerDist: block.centerDist,
         coverage: preset.coverage,
@@ -404,7 +544,13 @@ export function runF3City(spec: CitySpec): CityResult {
     });
   }
 
+
   clock('parcels+buildings+ground');
+  if (dbg)
+    console.log(
+      `[f3] 阶段④分项：布局 ${prof.layout} ms / 地面 ${prof.ground} ms；其中认领 ${groundStats.takeN} 次 ${groundStats.takeMs} ms；` +
+      `去重叠 草 ${groundStats.lawnBefore.toFixed(0)} → ${groundStats.lawnAfter.toFixed(0)} m²`
+    );
   stage('④ 地块/建筑/地面');
   // ---------------- ⑤ 道路图层（放在地块之后 push，绘制顺序由 y 决定，不靠顺序）
   pushRoads(scene, road, streets.graph);
@@ -413,15 +559,15 @@ export function runF3City(spec: CitySpec): CityResult {
   scene.surfaces.unshift({
     name: 'city_base',
     group: 'ground',
-    ring: spec.boundary.outer,
-    holes: spec.boundary.holes,
+    ring: siteBoundary.outer,
+    holes: siteBoundary.holes,
     mat: 'ground',
     y: -0.03,
     role: 'ground',
   });
 
   // ---------------- ⑦ 统计
-  const siteArea = areaM2(spec.boundary);
+  const siteArea = areaM2(siteBoundary);
   /**
    * 路网面的净面积就是真实道路占地：它已经把路口、圆角、人行道、绿带
    * 全部并成一张面，各层是它的差集分割，不存在路口重叠重复统计。
@@ -485,7 +631,7 @@ export function runF3City(spec: CitySpec): CityResult {
     `道路分层面积（同一张路网面的差集，互不重叠）：车行 ${road.roadAreaM2.toFixed(0)} / 路口 ${road.junctionAreaM2.toFixed(0)} / 人行 ${road.walkAreaM2.toFixed(0)}（其中转角平台 ${apronAreaM2.toFixed(0)}）/ 绿带 ${road.vergeAreaM2.toFixed(0)} m²；路缘 ${road.curb.length} 片`
   );
 
-  return {
+  const base: CityResult = {
     spec,
     preset,
     scene,
@@ -501,19 +647,57 @@ export function runF3City(spec: CitySpec): CityResult {
     },
     notes,
   };
+
+  /**
+   * 禁区在这里**补一刀**。
+   *
+   * 禁区本身不参与生成（它改到生成之后做局部后处理，见 `zoneapply.ts`），
+   * 编辑界面的做法是：基础城市按"无禁区"缓存 → 改禁区只重跑后处理。
+   * 但 `CitySpec.zones` 是个公开字段，直接调 `runF3City({ zones })` 的调用方
+   * （测试、导出脚本、以后接 CLI 的人）会以为禁区生效了，实际拿到的是全城。
+   * 这种"静默无效"正是之前踩过的坑，所以入口这里兜一层：传了禁区就一定生效。
+   *
+   * 交互界面走 `f3/ui.ts`，它显式传 `zones: []` 并自己调 `applyZonesToCity`，
+   * 所以不会在这里重复做一遍。
+   */
+  if (input.zones && input.zones.some((z) => z.enabled)) {
+    return applyZonesToCity(base, input.zones, {
+      padM: input.zonePadM ?? 6,
+      padPave: input.zonePadPave ?? true,
+    });
+  }
+  return base;
 }
 
 // ---------------------------------------------------------------- Scene 装配
 
+/**
+ * 草地的**四种深浅**。
+ *
+ * 用户要求：孤立的绿地分片随机 2~4 种绿，别整座城一个绿。
+ * 取 hash(环) 选材质 —— 同一块地每次生成都一样（确定性），但相邻地块深浅不同。
+ */
+const GREEN_MATS: MatKey[] = ['lawn', 'grassLight', 'grass', 'grassDark'];
+
+function ringHash(ring: Pt[]): number {
+  let h = 0;
+  for (let i = 0; i < ring.length; i++) {
+    h = (h * 31 + Math.round(ring[i].x * 97 + ring[i].y * 13)) | 0;
+  }
+  return Math.abs(h);
+}
+
 function pushGround(scene: Scene, g: ReturnType<typeof groundForParcel>, parcel: BuildingParcel): void {
   const group = `lot/${parcel.use}`;
   for (const p of g.patches) {
+    const isGreen = p.mat === 'lawn' || p.mat === 'grass' || p.mat === 'grassLight' || p.mat === 'grassDark';
+    const mat = isGreen ? GREEN_MATS[ringHash(p.ring) % GREEN_MATS.length] : p.mat;
     scene.surfaces.push({
       name: `${parcel.id}_${p.kind}`,
       group,
       ring: p.ring,
       holes: p.holes,
-      mat: p.mat,
+      mat,
       y: p.y,
       role: 'ground',
     });
@@ -645,6 +829,7 @@ function pointAtArc(pts: Pt[], sU: number): { at: Pt; dir: Pt } | null {
   const L = Pt.distance(prev, last) || 1;
   return { at: new Pt(last.x, last.y), dir: new Pt((last.x - prev.x) / L, (last.y - prev.y) / L) };
 }
+
 
 // ---------------------------------------------------------------- 便捷入口
 

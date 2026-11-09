@@ -476,7 +476,8 @@ function segIntersect(a: Pt, b: Pt, c: Pt, d: Pt): SegHit | null {
  * 路径是"一条街"的视觉单位：路面按路径铺，路口按节点切，
  * 所以一条被 5 个路口切开的直街仍然是一整条铺装（转角不会被切成小方块）。
  */
-function chainPaths(edges: Map<string, PathEdge>, nodes: Map<string, PathNode>): RoadPath[] {
+/** 把边接回整条街。**导出给 graphclean**：图清理改了节点/边之后必须重建一次。 */
+export function chainPaths(edges: Map<string, PathEdge>, nodes: Map<string, PathNode>): RoadPath[] {
   const used = new Set<string>();
   const out: RoadPath[] = [];
   const edgeList = [...edges.values()];

@@ -21,6 +21,11 @@ export interface Primitive {
   /** sRGB 0~1 */
   color: [number, number, number];
   doubleSided?: boolean;
+  /**
+   * 导出到 GLB 时的**目录层级**（不含自身名字）。
+   * 例如 `['街区','B12','建筑']` → `城市/街区/B12/建筑/<mesh>`。
+   */
+  path?: string[];
 }
 
 /**

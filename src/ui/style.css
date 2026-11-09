@@ -1066,3 +1066,174 @@ details.adv-sub > summary {
   max-width: 260px;
   white-space: normal;
 }
+
+/* ============================================================================
+   F3 单视口版：三维是唯一视口，原来的 2D 画布改成"正交顶视"投影
+   （见 src/ui/view3d.ts）。下面是这一版新增/改写的少量样式。
+   ========================================================================== */
+
+/* 视口常驻：不再有"2D 画布 / 3D 容器"两个元素互相遮挡 */
+#view3d {
+  display: block;
+  position: absolute;
+  inset: 0;
+}
+#view3d canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 生成中遮罩：一座城 2~5 s，必须让人知道"还活着"，否则看着就是白屏 */
+#busy {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 12px 22px;
+  border-radius: 10px;
+  background: rgba(16, 18, 22, 0.88);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 20;
+}
+#busy.on {
+  opacity: 1;
+}
+#busy.on::before {
+  content: '';
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent, #d98c4a);
+  animation: busyPulse 0.9s ease-in-out infinite;
+}
+@keyframes busyPulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+/* 生成说明：贴左下角的可折叠面板（只读，不进热路径） */
+#notes {
+  position: absolute;
+  left: 12px;
+  bottom: 44px;
+  width: min(560px, 62%);
+  z-index: 8;
+}
+#notes .sec {
+  background: rgba(16, 18, 22, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  backdrop-filter: blur(3px);
+}
+#notes .note {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  padding: 2px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+}
+#notes .note:last-child {
+  border-bottom: 0;
+}
+
+/* 统计条第二行 */
+#stats .sub {
+  opacity: 0.62;
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+/* 选中的禁区（列表里同步高亮） */
+.zone-item.sel {
+  outline: 1px solid var(--accent, #d98c4a);
+  outline-offset: -1px;
+}
+
+/* 致命错误横幅（三维初始化 / 生成崩掉时不再白屏） */
+.fatal {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #c4553f;
+  color: #fff;
+  padding: 10px;
+  font: 12px ui-monospace, monospace;
+  white-space: pre-wrap;
+  z-index: 999;
+}
+
+/* 编辑 → 应用条：只有存在未应用的修改时才出现，避免"改完没反应" */
+#applybar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 7px 14px;
+  border-radius: 999px;
+  background: rgba(22, 25, 31, 0.94);
+  border: 1px solid rgba(217, 140, 74, 0.5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  z-index: 22;
+}
+#applybar.on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+#applybar .txt {
+  font-size: 11px;
+  color: var(--text-dim, #9aa0aa);
+  letter-spacing: 0.02em;
+}
+#applybar button {
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+
+/* 整组被隐藏时的提示：图上"缺一块"最常见的误判就是它 */
+.hide-warn {
+  margin: 6px 0 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(217, 140, 74, 0.45);
+  background: rgba(217, 140, 74, 0.1);
+  font-size: 11px;
+  line-height: 1.5;
+  color: #e7b98a;
+}
+.hide-warn b {
+  color: #ffce9a;
+}
+.hide-warn button {
+  margin-top: 5px;
+  font-size: 10px;
+  padding: 3px 8px;
+}
+.lyr-group.all-off > .lyr-head b {
+  opacity: 0.55;
+}
+.lyr-head .hide-tag {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(196, 85, 63, 0.22);
+  color: #e88f79;
+  letter-spacing: 0.04em;
+}

@@ -54,6 +54,9 @@ export function layerOfSurface(s: SurfaceFeature): LayerId {
   }
   // 地块内容：按材质分。铺装 / 草地 / 水面是"这一片地是什么"，
   // 用户调图时最常单独关掉的就是草地和铺装。
+  // 地块四类地面各成一档，避免"浅色到底是底还是路"分不清
+  if (s.mat === 'lotBase') return 'pave:base';
+  if (s.mat === 'lotPath') return 'pave:path';
   switch (s.mat) {
     case 'grass':
     case 'grassLight':
@@ -175,7 +178,9 @@ export const LAYER_GROUPS: LayerGroupDef[] = [
     label: '铺装与地面',
     items: [
       { id: 'surface:ground', label: '城市底图', color: '#68645f' },
-      { id: 'pave:hard', label: '硬质铺装', color: '#b4ae9e' },
+      { id: 'pave:base', label: '街区硬质底', color: '#a3a09a' },
+      { id: 'pave:path', label: '地块通路', color: '#cabfa0' },
+      { id: 'pave:hard', label: '硬质铺装（禁区/广场）', color: '#b4ae9e' },
       { id: 'pave:asphalt', label: '停车场地坪', color: '#44474e' },
       { id: 'pave:grass', label: '草地', color: '#5c8045' },
       { id: 'pave:water', label: '水面', color: '#49718a' },
@@ -213,51 +218,19 @@ export const LAYER_GROUPS: LayerGroupDef[] = [
   },
 ];
 
-/** 2D 覆盖层：不产出几何，只在画布上叠信息 */
-export const OVERLAY_GROUPS: LayerGroupDef[] = [
-  {
-    id: 'ov-struct',
-    label: '结构覆盖',
-    open: true,
-    items: [
-      // 地块轮廓默认开着：它是"切得对不对"最直接的证据，线细、不挡图
-      { id: 'ov:blocks', label: '地块切分轮廓', color: '#25211d', on: true },
-      { id: 'ov:redline', label: '用地红线', color: '#c4553f', on: false },
-      { id: 'ov:centerline', label: '道路中线', color: '#2c6fbf', on: false },
-      { id: 'ov:junctions', label: '路口点', color: '#e0a02c', on: false },
-      { id: 'ov:vertices', label: '拓扑点（可拖）', color: '#8a5fb0', on: false },
-    ],
-  },
-  {
-    id: 'ov-cir',
-    label: 'R1 交通诊断',
-    open: false,
-    items: [
-      // 五档分开，是因为"只看新增"会得出"内部路是几个断头"的错误结论 ——
-      // 网络主体常常是既有铺装，新铺的只是补丁。
-      { id: 'ov:cir-existing', label: '既有可通行道路', color: '#4682b4', on: false },
-      { id: 'ov:cir-new', label: 'A* 新增连接', color: '#e0762e', on: false },
-      { id: 'ov:cir-merged', label: '合并后的完整网络', color: '#c85a1e', on: false },
-      { id: 'ov:cir-portals', label: '入口与街区出口', color: '#2f8f9d', on: false },
-      { id: 'ov:cir-unreachable', label: '接不上的需求点', color: '#d8341f', on: false },
-    ],
-  },
-  {
-    id: 'ov-info',
-    label: '信息覆盖',
-    open: true,
-    items: [
-      { id: 'ov:use', label: '用地类型着色', color: '#4a9d7c', on: false },
-      { id: 'ov:zones', label: '禁建区', color: '#c4553f', on: true },
-      { id: 'ov:guides', label: '方向控制线', color: '#3f6bb0', on: true },
-    ],
-  },
-];
+/**
+ * 覆盖层（原 `ov:*`）已随 Canvas 2D 视口一起下线。
+ *
+ * 它们原本只在 2D 画布上叠线（地块轮廓 / 红线 / 中线 / 拓扑点 / R1 诊断），
+ * 不产出任何几何，也没有对应的三维表达。现在选中高亮与禁区 / 方向线的
+ * 可视化由 `ui/view3d.ts` 的 overlayGroup 直接画在三维场景里，
+ * 不再走"图层显隐"这张表 —— 所以这里没有覆盖层了。
+ */
 
 /** 全部图层 id */
 export function allLayerIds(): LayerId[] {
   const out: LayerId[] = [];
-  for (const g of [...LAYER_GROUPS, ...OVERLAY_GROUPS]) {
+  for (const g of LAYER_GROUPS) {
     for (const it of g.items) out.push(it.id);
   }
   return out;
@@ -266,7 +239,7 @@ export function allLayerIds(): LayerId[] {
 /** 默认显隐：LayerDef.on 缺省为 true */
 export function defaultVisibility(): Record<LayerId, boolean> {
   const v: Record<LayerId, boolean> = {};
-  for (const g of [...LAYER_GROUPS, ...OVERLAY_GROUPS]) {
+  for (const g of LAYER_GROUPS) {
     for (const it of g.items) v[it.id] = it.on !== false;
   }
   return v;

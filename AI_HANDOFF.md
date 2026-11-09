@@ -1,5 +1,13 @@
 # TownForge · AI 交接文档
 
+> ⚠️ **2026-11-09 改版提示：产品已收敛为 F3 单链路。**
+> Planner 与 legacy 城市（含 legacy 路网 / Canvas 2D 视口）已从产品链路上移除，
+> `?mode=planner`、`?s1=`、`?pattern=`、`?parkingProvider=`、`?mode=legacy` 一律不再生效。
+> **接手请先读 [`docs/F3_V2_ARCHITECTURE.md`](./docs/F3_V2_ARCHITECTURE.md) 与
+> [`docs/F3_PERF_ZONE_PLAN.md`](./docs/F3_PERF_ZONE_PLAN.md)**，下面这份 2026-11-05 的
+> 正文只作为历史与 F3 内核的参考资料（其中"开关矩阵""代码地图"里的 legacy/planner
+> 部分已过期）。
+
 > 这份文档是写给**接手的 AI 开发工具**（Cursor / Claude Code / Codex 等）的。
 > 读完这一篇就能开工，不需要先读根目录那 12 份历史 `PHASE_*_REPORT.md`。
 >

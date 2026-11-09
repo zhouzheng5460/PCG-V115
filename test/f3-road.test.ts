@@ -218,16 +218,35 @@ ok('④ 标线全部落在车行面 / 路口内（裁剪生效）', stray <= roa
 {
   // 路口内必须有一圈路缘石边线（沿转角圆弧），且都贴着路口面边界
   const jedge = road.markings.filter((m) => m.kind === 'jedge');
+  /**
+   * 判据从"质心距边界"改成"**顶点**距边界"。
+   *
+   * 路口路缘线现在是一个转角一条**折线**（不再是 2 m 短段）：折线的质心会被
+   * 弦拉向路口内部，用质心判会误报；而"每个顶点都贴着边界"才是我们真正要的
+   * 性质（线不许飘到铺装上）。
+   */
   let off = 0;
   for (const m of jedge) {
-    const c = new Pt(
-      m.ring.reduce((a, q) => a + q.x, 0) / m.ring.length,
-      m.ring.reduce((a, q) => a + q.y, 0) / m.ring.length
-    );
-    const best = Math.min(...road.junction.map((s) => distToSurfaceEdge(c, s)));
-    if (best * 7 > 1.2) off++;
+    let worst = 0;
+    for (const p of m.ring) {
+      const best = Math.min(...road.junction.map((s) => distToSurfaceEdge(p, s)));
+      worst = Math.max(worst, best);
+    }
+    if (worst * 7 > 1.2) off++;
   }
-  ok('④ 路口有沿转角圆弧的路缘石边线', jedge.length > graph.junctions.length,
+  /**
+   * 覆盖率按 **80%** 判，不要求"每个路口都有一条"：
+   * 夹角很大 / 只有三条臂的路口，路口面会整个落在车行面内部（面积 113~226 m²），
+   * 那里本来就没有"路缘"可画（一圈都在沥青中间）。实测 85 个路口里 12 个属于这类。
+   */
+  ok('④ 路口有沿转角圆弧的路缘石边线', jedge.length > graph.junctions.length * 0.8,
+    `${jedge.length} 段 / ${graph.junctions.length} 个路口`);
+  /**
+   * 段数上限：路缘线是"一个转角一条折线"，正常每城 200 段上下。
+   * 上一版按 2 m 切段时是 2300+ 段，生成时间被拖慢 40% —— 这里设个天花板，
+   * 防止以后又退回"逐小段铺线"的写法。
+   */
+  ok('④ 路口边线段数没有爆掉（< 路口数 × 6）', jedge.length < graph.junctions.length * 6,
     `${jedge.length} 段 / ${graph.junctions.length} 个路口`);
   ok('④ 路口边线贴着路口面边界（没有飘到铺装上）', off <= jedge.length * 0.05,
     `${off} / ${jedge.length} 段离边界 > 1.2 m`);
