@@ -21,8 +21,8 @@ import { buildRoadGeom, unionPolys, type RoadGeom } from './roadgeom';
 import { growStreets } from './grow';
 import { growStreetsTensor } from './tensorgrow';
 import { applyZonesToCity } from './zoneapply';
-import { unionSurfaceSet } from '../core/clipper';
-import { selfIntersects } from '../town/planning/core/surface';
+import { splitPinched } from '../core/clipper';
+import { insideSurface, selfIntersects, surfaceUnionLegacy } from '../town/planning/core/surface';
 import {
   DENSITY_PRESETS,
   STYLE_PRESETS,
@@ -648,20 +648,76 @@ export function runF3City(input: CitySpec): CityResult {
   {
     const clean: typeof scene.surfaces = [];
     let fixedCount = 0;
+    let splitCount = 0;
+    const hasDup = (r: Pt[]): boolean => {
+      const seen = new Set<string>();
+      for (const q of r) {
+        const k = `${q.x.toFixed(5)},${q.y.toFixed(5)}`;
+        if (seen.has(k)) return true;
+        seen.add(k);
+      }
+      return false;
+    };
+    const push = (sf: (typeof scene.surfaces)[number], ring: Pt[], holes: Pt[][]): void => {
+      clean.push({ ...sf, ring, holes });
+    };
     for (const sf of scene.surfaces) {
-      const dirty = selfIntersects(sf.ring) || (sf.holes ?? []).some((h) => selfIntersects(h));
+      const holes = sf.holes ?? [];
+      const dirty = selfIntersects(sf.ring) || hasDup(sf.ring) || holes.some((h) => selfIntersects(h) || hasDup(h));
       if (!dirty) {
         clean.push(sf);
         continue;
       }
-      const fixed = unionSurfaceSet([{ outer: sf.ring, holes: sf.holes ?? [] }]).filter((q) => q.outer.length >= 3);
+      /**
+       * 自触环（顶点重复）**必须先拆**，再谈归一化。
+       *
+       * Clipper 的非零绕数并集**不拆自触环**：一个"8"字环交进去、原样还回来，
+       * 而 `earcut` 三角化这种环会吐出**跨越整片区域的大三角** —— 场景里表现为
+       * 一块路面/铺装莫名其妙变成大三角形（用户截图里那两块）。
+       * 按重复顶点拆成简单环之后，每一片都是合法多边形。
+       */
+      const parts = splitPinched(sf.ring);
+      if (parts.length > 1) {
+        splitCount++;
+        for (const r of parts) {
+          if (r.length < 3) continue;
+          // 洞按"洞心落在哪个片里"归属
+          const keep = holes.filter((h) => {
+            const cx = h.reduce((a, q) => a + q.x, 0) / h.length;
+            const cy = h.reduce((a, q) => a + q.y, 0) / h.length;
+            return insideSurface(new Pt(cx, cy), { outer: r, holes: [] });
+          });
+          push(sf, r, keep);
+        }
+        continue;
+      }
+      /**
+       * 真正的**自交**（边与边交叉，但没有重复顶点）必须用**旧引擎**拆。
+       *
+       * 实测对比同一片坏面（20 点）：
+       *   · Clipper 的非零绕数并集 → 1 片，**仍然自交**；
+       *   · martinez（polygon-clipping）→ 3 片简单环，自交消失。
+       * 自交环进 `earcut` 会吐出跨越整片区域的大三角（用户截图里那两块铺装三角）。
+       * 这是 martinez 在本项目里唯一还被保留的用途 —— 拆环，不是算布尔。
+       */
+      const fixed = surfaceUnionLegacy([{ outer: sf.ring, holes }]).filter((q) => q.outer.length >= 3);
       if (fixed.length === 0) continue;
       fixedCount++;
-      for (const q of fixed) clean.push({ ...sf, ring: q.outer, holes: q.holes });
+      for (const q of fixed) {
+        // martinez 拆出来的片之间可能只是"单点相接"，再按重复顶点拆一次
+        const sub = splitPinched(q.outer);
+        if (sub.length > 1) {
+          for (const r of sub) if (r.length >= 3) push(sf, r, []);
+        } else {
+          push(sf, q.outer, q.holes);
+        }
+      }
     }
-    if (fixedCount > 0) {
+    if (splitCount > 0 || fixedCount > 0) {
       scene.surfaces = clean;
-      notes.push(`场景卫生：${fixedCount} 片自交面已归一化（自交会被三角化填成一块盖住街区的大面）`);
+      notes.push(
+        `场景卫生：拆自触环 ${splitCount} 片 · 归一化自交环 ${fixedCount} 片（自触/自交会被三角化填成跨区大三角）`
+      );
     }
   }
 

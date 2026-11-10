@@ -36,6 +36,11 @@ const RANK: Record<RoadClass3, number> = { local: 0, collector: 1, arterial: 2 }
 
 /** 路口之间的最短边长（米）：小于它的两个路口其实是同一个 */
 const MIN_EDGE_M = 9;
+/**
+ * 两个**路口**之间的最小街长（米）。短于它的路口对直接并成一个路口。
+ * 15~20 m 是实测会"咬住"的区间（0.28~0.63 km 的城市里各出现 1~5 处）。
+ */
+const JUNCTION_EDGE_M = 20;
 /** 同一路口聚类的半径（米）：一个路口被切成两三个时，间距通常 10~20 m */
 const CLUSTER_M = 14;
 /** 两条臂的夹角小于它就算重复（度） */
@@ -77,7 +82,18 @@ export function simplifyGraph(graph: PathGraph): CleanStats {
         changed = true;
         continue;
       }
-      if (edgeLenM(e) >= MIN_EDGE_M) continue;
+      /**
+       * **路口-路口**之间的短边阈值要更宽。
+       *
+       * 两个路口相距 14~20 m 时，各自的让开区/转角弧会互相咬住，中间那条"街"
+       * 只剩十来米：它会生成一条**很短的独立道路**（自带两条斑马线、一段人行道），
+       * 俯视图里就是路口旁边挤着一条小街（用户截图）。
+       * 这种距离已经不构成一条街 —— 把两个路口并成一个（位置取中点，与上面
+       * 短边收缩同一套处理），让开区自然合成一个路口。
+       */
+      const jjShort = (nodes.get(e.a)?.degree ?? 0) >= 3 && (nodes.get(e.b)?.degree ?? 0) >= 3;
+      const limit = jjShort ? JUNCTION_EDGE_M : MIN_EDGE_M;
+      if (edgeLenM(e) >= limit) continue;
       const na = nodes.get(e.a);
       const nb = nodes.get(e.b);
       if (!na || !nb) {

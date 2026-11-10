@@ -233,7 +233,10 @@ export function offsetSurfaceOne(s: RingSurface, deltaU: number, opts?: OffsetOp
  * 一个独立环，交点在两段里各留一次。这才是"8"字形的正确切法 —— 直接按
  * 重复点切开会把两块的面积都算错。
  */
-export function splitPinched(ring: Pt[]): Pt[][] {
+export function splitPinched(ringIn: Pt[]): Pt[][] {
+  // 闭合点重复（首尾同一点）不是"自触"，先摘掉，否则下面的拆环逻辑会把它当成整环
+  let ring = ringIn;
+  if (ring.length > 3 && Pt.distance(ring[0], ring[ring.length - 1]) < 1e-6) ring = ring.slice(0, -1);
   if (ring.length < 4) return [ring];
   const out: Pt[][] = [];
   const stack: Pt[] = [];
