@@ -242,6 +242,69 @@ S1 骨架 / Pattern Registry、单地块用途与切分覆盖、巷道宽 / 避�
 **要彻底根治**仍需 A 的构造，但必须先把 `surfaceOffset` 换成健壮的多边形偏移
 （clipper 那类）：偏移可靠之后 B1/B2/R 由 B0 逐级长出来，天然嵌套，任何角度都不会有针。
 
+## 4.11 布尔与偏移换成 Clipper2（4.10 里被卡住的那一步）
+
+4.10 的结论是"要根治得先把 `surfaceOffset` 换成健壮的偏移"。这一步做了：
+接入 **Clipper2**（`clipper2-ts`，BSL-1.0，纯 TS，无 WASM），封装在
+`src/core/clipper.ts`，对外只有 5 个函数（偏移 / 并 / 差 / 交 / 拆自触环）。
+
+### 换掉了什么
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| `surfaceOffset` | 自己写的 `buffered()` + 自交检查 | Clipper2 `inflatePaths`（整数内核 + 内置拓扑清理） |
+| `surfaceUnion/Subtract/Intersect` | polygon-clipping (martinez) | Clipper2，旧实现保留为兜底 |
+| roadgeom 的 `unionPolys/diff/cap/clipBatch` | 同上 | Clipper2 优先，失败落回旧路径 |
+| 扣街区 `buildBlocks` | `场地 − 路网面` | `场地 − cutDomain`（见下） |
+
+开关：`F3_BOOL=legacy` 一键切回旧引擎做 A/B 与回退。
+
+**单位与精度**：1 世界单位（7 m）= 10000 格，1 格 = 0.7 mm。
+不能取 7 mm —— 代码里有"微偏移破退化"的用法（并集失败后把面外扩 5 mm 再并一次），
+7 mm 的格子会把它抹成 0，那个重试就变成"什么都没做"。
+
+### 踩到的四个坑（每个都真出过问题）
+
+1. **不能混用两个引擎**。先只把 `surfaceOffset` 换成 Clipper，布尔仍走 martinez：
+   Clipper 产出的路网面（含共线边）喂给 martinez，街区被并掉 —— 结构化城 20 → 12 个。
+   结论：整体切换，一格都不许混（唯一例外见第 3 条）。
+2. **路面精确裁在红线上 = 发丝缝**。布尔量化后路面与红线差 0.7 mm，外围街区顺着
+   这条缝连成一圈：campus 9 个街区并成 3 个，最大一块 33 万 m²、只有 11 个顶点。
+   修法：**只给扣街区**单独圆角化一份**未裁**的路网面（`RoadGeom.cutDomain`）。
+   可见面必须仍旧"先裁后圆" —— 圆角对凸角是**削掉**材料的，顺序反了会把红线
+   附近的转角削进场地（实测一个路口中心因此掉到路面外）。
+3. **Clipper 不拆"自己碰自己"的环**。`sanitize` 原来靠 martinez 的并集把自交环
+   拆成简单环，换引擎后失效（11 个自交环进三角化 = 尖刺）。修法：新增
+   `splitPinched()` 按重复顶点拆环；`sanitize` 的修复路径**只**借旧引擎一次。
+   街区也要拆：R01 样板两个街区并成一个 15259 m² 的"8"字环，被判成 park、0 栋楼。
+4. **NaN 会从质心一路传到容积率**。某块地轮廓退化 → `centroidOf` 出 NaN →
+   `centerDist` NaN → 层数 NaN → 整城 `gfaM2 = NaN`。在 `height.ts` / `blocks.ts` /
+   `build.ts` 三处加了非有限值护栏（`NaN <= 0` 是 `false`，原来的 `hU <= 0` 挡不住）。
+
+### 结果
+
+- **布尔静默失败：453 次 → 0 次**（旧引擎每出一座城报 453 次
+  `Tried to create degenerate segment at [NaN, NaN]`，而它的兜底是 `return 原值`，
+  等于那一刀没切）。这条现在是 `f3-road.test.ts` ⑩ 的常驻断言。
+- **生成快 44%~63%**（r=62，同参数同 seed）：
+
+  | 风貌 | 旧引擎 | Clipper2 |
+  |---|---|---|
+  | structured | 5308 ms | 2994 ms |
+  | organic | 5406 ms | 2165 ms |
+  | campus | 3024 ms | 1128 ms |
+
+- **街区与旧引擎逐块一致**（面积集合完全相同：26 / 34 / 12 块），说明换引擎没有
+  偷偷改变城市结构。
+- 包体 +71 kB（gzip +19 kB）。
+
+### 还没做的
+
+A 构造（只圆 B0、B1/B2/R 由它逐级偏移）现在**技术上可行了**，但还差一步：
+断面宽度是**按道路等级**变的（主干 17 m / 次干 12 m / 支路 8 m），一次全局 delta
+不够用，需要 Clipper 的 `executeWithCallback` 做**逐顶点变距偏移**。
+当前分层仍是"四层各自缓冲 + 各自圆角"，靠 4.10 的 B 方案保证同心。
+
 ## 5. 已知问题（下一步）
 
 1. **地面层是性能大头**（阶段④的 65%），计划见 perf 文档 P0-1。

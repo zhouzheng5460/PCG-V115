@@ -129,11 +129,17 @@ function floorRange(use: BlockUse, d: (typeof DENSITY_PRESETS)[CityDensity]): [n
  * 用途和密度预设给定。`heightScale` 是用户全局倍率，仍单独作用于最终高度。
  */
 function gradient(ctx: HeightCtx): number {
+  /**
+   * NaN 兜底：`centerDist` / `access` 是从几何里算出来的（质心到场地中心的
+   * 归一化距离），只要某一块地的轮廓退化（质心算出 NaN），它们就会带着 NaN
+   * 一路传到层数、传到 `h`、最后把整城 gfa 变成 NaN。
+   * 这里一律退回"中性梯度"（g = 1），不允许 NaN 往下走。
+   */
   if (ctx.access === undefined) {
-    const cd = clamp(ctx.centerDist, 0, 1);
+    const cd = Number.isFinite(ctx.centerDist) ? clamp(ctx.centerDist, 0, 1) : 0.55;
     return cd < 0.55 ? 1 + (0.55 - cd) * 1.8 : 1;
   }
-  const a = clamp(ctx.access, 0, 1);
+  const a = Number.isFinite(ctx.access) ? clamp(ctx.access, 0, 1) : 0.5;
   return 0.78 + 0.82 * a;
 }
 
@@ -224,8 +230,12 @@ export function heightOf(ctx: HeightCtx): HeightOut {
 
   t = clamp(t, 0, 1.06);
   // 区位梯度决定盖几层；层高固定为密度预设的 floorH，只留用户全局倍率
-  const floors = Math.max(1, Math.round((lo + t * (hi - lo)) * g));
+  const floors = Math.max(1, Math.round((lo + t * (hi - lo)) * g) || 1);
   const hU = (floors * d.floorH * ctx.heightScale) / 7;
+  if (!Number.isFinite(hU) || hU <= 0) {
+    // 走到这里说明上游又漏了一个非有限值：给最低层数，别把 NaN 传进 gfa
+    return { hU: (1 * d.floorH) / 7, floors: 1, ...solidStyle(ctx.use, 1, lo, hi, ctx.band), why: '高度算不出来（非有限值）→ 退回 1 层' };
+  }
   const st = solidStyle(ctx.use, floors, lo, hi, ctx.band);
 
   return {

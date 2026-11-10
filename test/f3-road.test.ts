@@ -19,6 +19,7 @@ import {
   type PlanSurface,
 } from '../src/town/planning/core/surface';
 import { cityOutline, runF3City } from '../src/f3';
+import { geometryFailures, resetGeometryFailures } from '../src/town/planning/core/surface';
 import { M2, U } from '../src/f3/geom';
 import { MIN_CROSSING_GAP_M, MIN_CROSSING_WIDTH_M, junctionCutDistances } from '../src/f3/roadgeom';
 import { arcVertexCount } from '../src/f3/rounding';
@@ -526,7 +527,10 @@ console.log('\n=== ⑧ 单一路网面：街区 / 人行道 / 绿带同源 ===')
   let jIn = 0;
   for (const nid of graph.junctions) {
     const n = graph.nodes.get(nid);
-    if (n && dom.some((d) => insideSurface(n.at, d))) jIn++;
+    // 判据是"路口中心属于路网面"：在内**或落在边上**都算。
+    // 只判在内不够 —— 靠近红线的路口，中心会正好压在路网面的边线上，而
+    // 点在多边形边上的判定本来就没有确定答案（浮点两边都能成立）。
+    if (n && dom.some((d) => insideSurface(n.at, d) || distToSurfaceEdge(n.at, d) < 1e-3)) jIn++;
   }
   ok('⑧ 每个路口中心都在路网面里（路口是路网面自己的形状）',
     jIn === graph.junctions.length, `${jIn} / ${graph.junctions.length}`);
@@ -713,6 +717,31 @@ ok('① 同 seed 的过街设施 / 路灯 / 车位线完全一致',
   r2.scene.props.filter((p) => p.kind === 'lamp' || p.kind === 'lampDouble').length === lamps.length &&
   r2.scene.paths.filter((p) => p.group === 'parking/marking').length === stalls.length,
   `${r2.debug.road.crossings.length} / ${lamps.length} / ${stalls.length}`);
+
+// ---------------------------------------------------------------- ⑩ 布尔引擎
+//
+// 这一段守的是"几何没有静默失败"。旧引擎（polygon-clipping）每出一座城会失败
+// **453 次**（`Tried to create degenerate segment at [NaN, NaN]`），而且它是
+// `catch { return 原值 }` —— 失败的那一刀等于没切，调用方拿到的是一块假的地面。
+// 换成 Clipper2 之后是 0 次，所以这里有资格断言"一次都不许有"。
+console.log('\n=== ⑩ 布尔引擎：一次都不许静默失败 ===');
+{
+  resetGeometryFailures();
+  const c = runF3City({
+    boundary: { outer: cityOutline(62, 20261109, 11), holes: [] as Pt[][] },
+    style: 'structured',
+    density: 'high',
+    program: 'mixed',
+    seed: 20261109,
+  });
+  const f = geometryFailures;
+  ok(
+    '⑩ 出城全过程没有一次布尔静默失败',
+    f.union === 0 && f.subtract === 0 && f.intersect === 0,
+    `并 ${f.union} / 差 ${f.subtract} / 交 ${f.intersect}${f.lastMessage ? ' · ' + f.lastMessage : ''}`
+  );
+  ok('⑩ 这座城确实建出来了（否则上面的 0 没有意义）', c.stats.buildingCount > 500, `${c.stats.buildingCount} 栋`);
+}
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} 项断言，${fail} 项失败`);
 if (fail > 0) process.exitCode = 1;

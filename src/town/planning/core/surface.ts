@@ -18,12 +18,28 @@
 
 import { Pt } from '../../../core/geom';
 import polygonClipping from 'polygon-clipping';
+import {
+  intersectSurfaceSet,
+  offsetSurfaceSet,
+  subtractSurfaceSet,
+  unionSurfaceSet,
+} from '../../../core/clipper';
 
 /** 一个平面区域：外环 + 若干洞（洞的方向与外环相反，此处不做强制，交给三角化处理） */
 export interface PlanSurface {
   outer: Pt[];
   holes: Pt[][];
 }
+
+/**
+ * 布尔引擎开关：默认 Clipper2，`F3_BOOL=legacy` 退回 polygon-clipping。
+ *
+ * **不要混用**：两套引擎各自量化边界，一个产出的环喂给另一个会掉进
+ * "共线边/重复顶点"的病态输入（实测：Clipper 产出的路网面交给 martinez
+ * 扣街区，结构化城市的街区数从 20 掉到 12 —— 部分洞没切出来，街区被并掉）。
+ * 要么全 Clipper，要么全旧实现，靠这个开关整体切换。
+ */
+const USE_CLIPPER = !(typeof process !== 'undefined' && process.env?.F3_BOOL === 'legacy');
 
 /** 多边形钳制库的嵌套元组格式：Polygon = Ring[]，MultiPolygon = Polygon[] */
 type Nest = number[][][][];
@@ -213,6 +229,14 @@ export function surfaceUnion(ss: PlanSurface[]): PlanSurface[] {
   const list = ss.filter((s) => s.outer.length >= 3);
   if (list.length === 0) return [];
   if (list.length === 1) return list;
+  if (USE_CLIPPER) {
+    try {
+      const q = unionSurfaceSet(list);
+      if (q.length > 0) return q;
+    } catch {
+      /* 落到下面的旧路径 */
+    }
+  }
   // 先按最自然的方式一次并完（结果质量最好）；
   // 只有在它抛错（典型是 martinez 递归太深 → `Maximum call stack size exceeded`）
   // 时才降级为两两归并 —— 两两归并的合并成功率略低，但不会爆栈。
@@ -223,6 +247,29 @@ export function surfaceUnion(ss: PlanSurface[]): PlanSurface[] {
       return unionFold(list);
     } catch {
       noteFailure('union', first);
+      return list;
+    }
+  }
+}
+
+/**
+ * 旧引擎（polygon-clipping）的并集，**只给"修复自交环"用**。
+ *
+ * 为什么需要一条例外：Clipper2 的并集用非零绕数，**不会拆分"自己碰自己"的环**
+ * （一个环在路口针尖处自触，它原样吐回一个带针的环）。martinez 会把这种环
+ * 拆成两张简单环 —— 这正是 `sanitize` 想要的"heal"。
+ * 所以这里只保留这一条用途：几何已经被 Clipper 算完，只有病态环借旧引擎拆开。
+ * 其余布尔一律不许走这里，混用会让两套引擎的量化边界打架。
+ */
+export function surfaceUnionLegacy(ss: PlanSurface[]): PlanSurface[] {
+  const list = ss.filter((s) => s.outer.length >= 3);
+  if (list.length === 0) return [];
+  try {
+    return unionOnce(list);
+  } catch {
+    try {
+      return unionFold(list);
+    } catch {
       return list;
     }
   }
@@ -257,6 +304,13 @@ export function surfaceSubtract(a: PlanSurface[], b: PlanSurface[]): PlanSurface
   const bs = b.filter((s) => s.outer.length >= 3);
   if (as.length === 0) return [];
   if (bs.length === 0) return as;
+  if (USE_CLIPPER) {
+    try {
+      return subtractSurfaceSet(as, bs);
+    } catch {
+      /* 落到下面的旧路径 */
+    }
+  }
   try {
     return subtractOnce(as, bs);
   } catch (e) {
@@ -281,6 +335,13 @@ export function surfaceIntersect(a: PlanSurface[], b: PlanSurface[]): PlanSurfac
   const as = a.filter((s) => s.outer.length >= 3);
   const bs = b.filter((s) => s.outer.length >= 3);
   if (as.length === 0 || bs.length === 0) return [];
+  if (USE_CLIPPER) {
+    try {
+      return intersectSurfaceSet(as, bs);
+    } catch {
+      /* 落到下面的旧路径 */
+    }
+  }
   try {
     return fromNest(polygonClipping.intersection(toNest(as) as never, toNest(bs) as never) as unknown as Nest);
   } catch (e) {
@@ -406,23 +467,33 @@ function clipHalfPlane(poly: Pt[], a: Pt, nx: number, ny: number, d: number): Pt
   return out;
 }
 
-/** 外扩（正数）/ 内缩（负数）。洞的方向相反：内缩时洞会变大。 */
+/**
+ * 外扩（正数）/ 内缩（负数）。洞的方向相反：内缩时洞会变大。
+ *
+ * 实现换成了 Clipper2（`core/clipper.ts`）。换掉的是 `buffered()` + 事后自交
+ * 检查那一版，它在**大输入**上会成片失败：合并后的路网面有上万顶点、上百个洞，
+ * 斜接外扩在凹角处必然自己穿自己，`surfaceValid` 判成自交就返回 `[]` ——
+ * 于是"路缘整层消失、人行道宽度乱跳"，而且它是**静默**的（返回空不是异常）。
+ *
+ * Clipper2 在内部用整数运算并自带拓扑清理：凹角自交、相邻片互相吃掉、细缝
+ * 闭合都在同一次调用里解决。空结果只表示"真的缩没了"。
+ */
 export function surfaceOffset(s: PlanSurface, d: number): PlanSurface[] {
   if (Math.abs(d) < 1e-9) return [s];
-  // buffered() 的符号约定：**正数 = 内缩**（沿 CCW 环的左手法线走）。
-  // 对外语义反过来（正数 = 外扩），所以这里要取反。
-  const out: PlanSurface = {
-    outer: buffered(s.outer, -d),
-    // 洞的方向与外环相反：外环外扩时洞要变小
-    holes: s.holes.map((h) => buffered(h, d)),
-  };
-  if (!surfaceValid(out)) return [];
-  // 凹角处的 miter 可能自交 —— 交给并集规范化一次（只在自交时才做，省开销）
-  if (selfIntersects(out.outer)) {
-    const fixed = surfaceUnion([out]);
-    return fixed.filter((q) => surfaceArea(q) > 1e-9);
-  }
-  return [out];
+  return offsetSurfaceSet([s], d).filter((q) => surfaceValid(q));
+}
+
+/**
+ * **一组面整体**外扩 / 内缩 —— 层与层之间同源的关键。
+ *
+ * 单面逐片偏移再并集，和整体偏移**不等价**：相邻两片各自外扩后会在中间
+ * 拱出一条"双倍宽"的脊，缝没了但形状错了。整体偏移是一次 Minkowski 膨胀，
+ * 切口只出现在真正的外轮廓上。
+ */
+export function surfaceOffsetSet(list: PlanSurface[], d: number): PlanSurface[] {
+  if (list.length === 0) return [];
+  if (Math.abs(d) < 1e-9) return list.slice();
+  return offsetSurfaceSet(list, d).filter((q) => surfaceValid(q));
 }
 
 /** 环是否自交（偏移后的自检）
@@ -454,43 +525,11 @@ export function surfaceInset(s: PlanSurface, d: number): PlanSurface[] {
   return surfaceOffset(s, -Math.abs(d));
 }
 
-/**
- * 单环的简单偏移（沿顶点法线做 miter）。
- *
- * 真正的 offset 应该走 Clipper2（PRD §5），但这里先给出**不引入新依赖**的
- * 可用实现：对规划层的矩形 / 梯形 / 凸多边形足够准；凹角处靠 miter 上限兜住。
- * 需要工业级 offset 时只改这一个函数，调用方不动。
- */
-function buffered(ring: Pt[], delta: number): Pt[] {
-  const n = ring.length;
-  if (n < 3 || delta === 0) return ring;
-  const ccw = ringArea(ring) > 0;
-  const sgn = ccw ? 1 : -1;
-  const out: Pt[] = [];
-  for (let i = 0; i < n; i++) {
-    const prev = ring[(i + n - 1) % n];
-    const cur = ring[i];
-    const next = ring[(i + 1) % n];
-    const e0 = unit(new Pt(cur.x - prev.x, cur.y - prev.y));
-    const e1 = unit(new Pt(next.x - cur.x, next.y - cur.y));
-    // 左手法线；CCW 环的左手边是内侧
-    const n0 = new Pt(-e0.y * sgn, e0.x * sgn);
-    const n1 = new Pt(-e1.y * sgn, e1.x * sgn);
-    let mid = new Pt(n0.x + n1.x, n0.y + n1.y);
-    const ml = Math.hypot(mid.x, mid.y);
-    // 折返点（两条边几乎反向）法线相加会归零：这时退回用第一条边的法线，
-    // 否则除以 0 会把顶点甩到原点，整个面直接炸掉
-    mid = ml < 1e-6 ? new Pt(n0.x, n0.y) : new Pt(mid.x / ml, mid.y / ml);
-    const cos = Math.max(0.35, mid.x * n0.x + mid.y * n0.y);
-    out.push(new Pt(cur.x + mid.x * (delta / cos), cur.y + mid.y * (delta / cos)));
-  }
-  return out;
-}
-
-function unit(p: Pt): Pt {
-  const l = Math.hypot(p.x, p.y) || 1;
-  return new Pt(p.x / l, p.y / l);
-}
+// 这里原来有一个自己写的 `buffered()`（沿顶点法线做 miter + 上限兜底）。
+// 它在"矩形 / 梯形 / 凸多边形"上够用，但**合并后的路网面**（上万顶点、
+// 上百个洞）上会成片失败：凹角处 miter 自己穿自己 → `surfaceValid` 判自交
+// → 返回空。现在偏移全部走 `core/clipper.ts`（Clipper2 整数内核），
+// 这个实现已删除 —— 留着只会有人再调它一次，然后重新踩一遍。
 
 /** 面是否退化（外环 < 3 点 / 面积近似 0） */
 export function surfaceValid(s: PlanSurface): boolean {

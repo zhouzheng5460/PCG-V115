@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "check": "tsc --noEmit",
-    "test": "tsx test/f3.test.ts && tsx test/f3-road.test.ts && tsx test/f3-ground-layers.test.ts && tsx test/f3-export-zone.test.ts && tsx test/f3-overrides.test.ts && tsx test/layers.test.ts && tsx test/glb.test.ts"
+    "test": "tsx test/clipper.test.ts && tsx test/f3.test.ts && tsx test/f3-road.test.ts && tsx test/f3-ground-layers.test.ts && tsx test/f3-export-zone.test.ts && tsx test/f3-overrides.test.ts && tsx test/layers.test.ts && tsx test/glb.test.ts"
   },
   "dependencies": {
     "@types/poly2tri": "^0.9.27",
+    "clipper2-ts": "^2.0.1-19",
     "earcut": "^3.2.4",
     "poly2tri": "^1.5.0",
     "polygon-clipping": "^0.15.7",

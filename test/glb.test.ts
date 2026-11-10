@@ -62,13 +62,13 @@ check(
   [...new Set(zoneGreens.map((s) => s.mat))].join(',')
 );
 // 禁区里的建筑必须整栋消失（不是布尔切一半）
+// 注：`scene.solids` 全是建筑体量（tower/slab/podium/house/...），不需要按 kind 过滤
 const inZone = (x: number, y: number): boolean => Math.hypot(x, y) < 13.2;
 const ringCenter = (r: Pt[]): { x: number; y: number } => ({
   x: r.reduce((a, p) => a + p.x, 0) / Math.max(1, r.length),
   y: r.reduce((a, p) => a + p.y, 0) / Math.max(1, r.length),
 });
 const strayBuildings = city.scene.solids.filter((s) => {
-  if (s.kind !== 'building') return false;
   const c = ringCenter(s.ring);
   return inZone(c.x, c.y);
 });

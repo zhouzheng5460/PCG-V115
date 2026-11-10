@@ -493,7 +493,8 @@ export function realizeBuildings(parcel: BuildingParcel, footprint: Pt[], opts: 
     ]);
 
   const add = (ringIn: Pt[], hU: number, kind: SolidKind, wall: keyof typeof MAT, roof: keyof typeof MAT): void => {
-    if (ringIn.length < 3 || hU <= 0) return;
+    // `hU <= 0` 挡不住 NaN（NaN <= 0 是 false），必须单独判
+    if (ringIn.length < 3 || !(hU > 0)) return;
     let ring = ringIn;
     /**
      * 统一再收 8 cm：地块边界现在是**曲线**（路缘修形之后），

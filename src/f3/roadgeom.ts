@@ -10,6 +10,7 @@
 
 import { Pt } from '../core/geom';
 import { bufferPolyline } from '../core/polyline';
+import { intersectSurfaceSet, subtractSurfaceSet, unionSurfaceSet } from '../core/clipper';
 import {
   bboxOf,
   distToSurfaceEdge,
@@ -21,6 +22,7 @@ import {
   surfaceOffset,
   surfaceSubtract,
   surfaceUnion,
+  surfaceUnionLegacy,
   type PlanSurface,
 } from '../town/planning/core/surface';
 import {
@@ -48,6 +50,14 @@ export type { MarkKind, MarkSeg };
 /** 过街设施门槛与最小间距：实现在 markings.ts，这里重导出给测试与 UI 用 */
 export { MIN_CROSSING_GAP_M, MIN_CROSSING_WIDTH_M };
 
+/**
+ * 布尔引擎开关：默认 Clipper2，`F3_BOOL=legacy` 时退回 polygon-clipping。
+ *
+ * 留着它是为了 **A/B 与回退**：改的是整条路面几何的地基，
+ * 出问题时必须能一键切回旧实现做对比，而不是靠 git 回滚整棵树。
+ */
+const USE_CLIPPER = !(typeof process !== 'undefined' && process.env?.F3_BOOL === 'legacy');
+
 export interface RoadGeom {
   carriage: PlanSurface[];
   junction: PlanSurface[];
@@ -74,6 +84,13 @@ export interface RoadGeom {
   crossings: Pt[];
   /** 唯一真值源：完整、已圆角的道路用地面（含全部路口） */
   domain: PlanSurface[];
+  /**
+   * 同一张面，但**没有裁回红线**（红线外还留着半个断面），**只用于扣街区**。
+   *
+   * 见 `buildRoadGeom` 里 `cutDomain` 的说明：可见几何用 `domain`，
+   * 扣街区用这个（切口是正面积，街区不会顺着发丝缝连成一片）。
+   */
+  cutDomain: PlanSurface[];
   /** 同 domain：扣街区用 */
   reserve: PlanSurface[];
   roadAreaM2: number;
@@ -621,9 +638,17 @@ export function buildRoadGeom(
   }
   tick('zones');
 
-  /** 批量裁回红线（一次求交，失败再逐片） */
+  /** 批量裁回红线（Clipper2 优先，失败再走老路径逐片） */
   const clipBatch = (list: PlanSurface[]): PlanSurface[] => {
     if (list.length === 0) return [];
+    if (USE_CLIPPER) {
+      try {
+        const q = intersectSurfaceSet(list, [site]);
+        if (q.length) return q.map(dropPins).filter((s) => M2(surfaceArea(s)) > 0.6);
+      } catch {
+        /* 落到老路径 */
+      }
+    }
     try {
       const q = surfaceIntersect(list, [site]);
       if (q.length) return q.map(dropPins).filter((s) => M2(surfaceArea(s)) > 0.6);
@@ -680,7 +705,13 @@ export function buildRoadGeom(
     }
   }
   const Braw: PlanSurface[][] = [];
-  for (let k = 0; k < 4; k++) Braw.push(clipBatch(unionPolys([...band[k], ...zones[k]])));
+  /** 第 3 层的**未裁**并集：只用来做"扣街区"的那一份（见 `cutDomain`） */
+  let bandU3: PlanSurface[] = [];
+  for (let k = 0; k < 4; k++) {
+    const u = unionPolys([...band[k], ...zones[k]]);
+    if (k === 3) bandU3 = u;
+    Braw.push(clipBatch(u));
+  }
   tick('bands');
   for (let k = 0; k < 4; k++) {
     if (Braw[k].length === 0) notes.push(`第 ${k} 层道路面为空 —— 该层没有可生成的侧带（不静默当成功）`);
@@ -861,12 +892,48 @@ export function buildRoadGeom(
    * 让夹子永不触发，四层就恢复严格同心。同时给 fillet 加了个计数器
    * （`filletClampCount`），测试里可以断言"没有一次夹切"。
    */
+  /**
+   * 圆角化 + 裁回红线。
+   *
+   * 顺序不能反（先圆角再裁）：圆角对**凸角**是**削掉**材料的，
+   * 而要裁掉的那些角在红线外，先圆角就会把红线附近的凸角连带削掉一大块
+   * （实测 cc 的一个路口中心因此落到了路网面外）。先裁后圆，圆角只作用在
+   * 真正留在场地里的角上。
+   */
   const R = clipBatch(roundWith(Braw[3], outerRAt));
+  /**
+   * **只给扣街区用**的一份路网面：圆角化但**没裁回红线**。
+   *
+   * 为什么不能直接用 `R`：`R` 精确停在红线上，布尔按 0.7 mm 量化之后路面与
+   * 红线差那么一格 —— 路口两侧的街区就顺着这条发丝缝连成一片，整圈外围街区
+   * 并成一个包住场地的环（实测 campus：9 个街区并成 3 个，最大 33 万 m²、
+   * 只有 11 个顶点）。这份在红线外还留着半个断面，切口是正面积。
+   *
+   * 为什么可见面不能这么算：圆角对**凸角是削掉**材料的，先把红线外的角圆掉
+   * 再裁，会把红线附近的转角连带削进场地（实测一个路口中心因此掉到路面外）。
+   * 所以可见面仍旧"先裁后圆"，只有扣街区这一份顺序反过来。
+   */
+  const cutDomain = unionPolys([...R, ...roundWith(bandU3, outerRAt)]);
   const B: PlanSurface[][] = [];
   for (let k = 0; k < 3; k++) B.push(clipBatch(roundWith(Braw[k], radiusFor(k))));
   for (let k = 1; k < 3; k++) B[k] = unionPolys([...B[k], ...B[k - 1]]);
   B.push(R);
   tick('layers-round');
+  /**
+   * 分层面积诊断（`F3_TC=1` 时才打印）。
+   *
+   * 为什么要常驻：这四层的面积关系是"同心"的唯一硬证据。
+   * 绿带宽度为 0 的断面（structured 风格全是 0）里 `B2` 与 `R` 必须**完全相等**；
+   * 一旦 R 明显大于 B2，差值就是转角那块被平台接管的多余铺装 —— 肉眼看到的是
+   * "路口四周糊了一大片米色"，而这行数字能直接指认。
+   */
+  if (typeof process !== 'undefined' && process.env?.F3_TC) {
+    const sum = (l: PlanSurface[]): number => l.reduce((a, s) => a + M2(surfaceArea(s)), 0);
+    console.log(
+      `[rg] 层面积 m² B0 ${sum(B[0]).toFixed(0)} ⊂ B1 ${sum(B[1]).toFixed(0)} ⊂ B2 ${sum(B[2]).toFixed(0)} ⊂ R ${sum(R).toFixed(0)}` +
+        ` · 断面侧带宽 w=[${(0).toFixed(2)}, ${(sideW('arterial')[1] * 7).toFixed(2)}, ${(sideW('arterial')[2] * 7).toFixed(2)}, ${(sideW('arterial')[3] * 7).toFixed(2)}] m`
+    );
+  }
 
   // ---------------- ④ 所有层由 R / B 差集派生
   /**
@@ -903,7 +970,9 @@ export function buildRoadGeom(
       }
       return { outer, holes };
     };
+    let dbgIn = 0;
     for (const s0 of list) {
+      if (selfIntersects(s0.outer) || s0.holes.some((h) => selfIntersects(h))) dbgIn++;
       const s1 = norm(s0);
       if (!s1) continue;
       /**
@@ -918,7 +987,12 @@ export function buildRoadGeom(
         continue;
       }
       try {
-        const healed = surfaceUnion([s1]);
+        /**
+         * 修复必须走**旧引擎**：Clipper2 的非零绕数并集不会拆"自己碰自己"
+         * 的环（原样吐回一个带针的环），而自触环进三角化就是一团尖刺。
+         * martinez 会把自触环拆成两张简单环 —— 这是它唯一还被保留的用途。
+         */
+        const healed = surfaceUnionLegacy([s1]);
         for (const q of healed) {
           const n = norm(q);
           if (n && M2(surfaceArea(n)) > 1) out.push(n);
@@ -927,6 +1001,10 @@ export function buildRoadGeom(
         /* 修不了就丢掉这一片：宁可少一块铺装，也不要一张破面 */
       }
     }
+    if (typeof process !== 'undefined' && process.env?.F3_TC && dbgIn) {
+      const badOut = out.filter((q) => selfIntersects(q.outer) || q.holes.some((h) => selfIntersects(h))).length;
+      console.log(`[rg] sanitize: 输入自交 ${dbgIn} 片 → 输出自交 ${badOut} 片（共 ${list.length} 输入 / ${out.length} 输出）`);
+    }
     return out;
   };
 
@@ -934,6 +1012,14 @@ export function buildRoadGeom(
   const diff = (a: PlanSurface[], b: PlanSurface[]): PlanSurface[] => {
     if (a.length === 0) return [];
     if (b.length === 0) return a.filter((s) => M2(surfaceArea(s)) > 1);
+    // Clipper2 优先：整数内核，不会因为"某一片自交"就整批静默失败
+    if (USE_CLIPPER) {
+      try {
+        return subtractSurfaceSet(a, b).filter((s) => M2(surfaceArea(s)) > 1);
+      } catch {
+        /* 落到老路径 */
+      }
+    }
     try {
       return surfaceSubtract(a, b).filter((s) => M2(surfaceArea(s)) > 1);
     } catch {
@@ -970,6 +1056,14 @@ export function buildRoadGeom(
    *  只对派生层做，不对 B[k] 做（B[k] 与 R 共线，自求交是病态输入）。 */
   const cap = (list: PlanSurface[]): PlanSurface[] => {
     if (list.length === 0) return list;
+    if (USE_CLIPPER) {
+      try {
+        const q = intersectSurfaceSet(list, R).filter((s) => M2(surfaceArea(s)) > 1);
+        if (q.length) return q;
+      } catch {
+        /* 落到下面的老路径 */
+      }
+    }
     try {
       const q = surfaceIntersect(list, R).filter((s) => M2(surfaceArea(s)) > 1);
       if (q.length) return q;
@@ -1275,6 +1369,7 @@ export function buildRoadGeom(
     crossings: mk.crossings,
     /** 完整道路用地（含路口与圆角）= 扣街区的唯一依据 */
     domain: sanitize(R),
+    cutDomain: sanitize(cutDomain),
     reserve: sanitize(R),
     roadAreaM2: sum(carriage),
     reserveAreaM2: sum(R),
@@ -1337,20 +1432,31 @@ function polyLenM(pts: Pt[]): number {
 /**
  * 稳健并集。
  *
- * polygon-clipping 在"共享边几乎重合"时会返回两个环（并了个寂寞），
- * 或直接抛错。这里逐块合并，失败就微偏移重试；再失败就原样留下
- * （面积会多算一点，但几何不丢）—— 不允许静默变成成功。
+ * **现在先走 Clipper2**（`core/clipper.ts`）：整数内核 + 输出自带拓扑清理，
+ * 共享边几乎重合、退化边、凹角自交这些让它一次并干净。
+ *
+ * 下面保留 polygon-clipping 的逐块合并兜底：它是老实现，慢且会在
+ * "两片几乎共边"时返回两个环（并了个寂寞）或直接抛错，但作为兜底还在 ——
+ * 真正的差别是**正常情况下不再走它**。
  */
 export function unionPolys(list: PlanSurface[]): PlanSurface[] {
   const clean = list.filter((s) => s.outer.length >= 3 && Math.abs(surfaceArea(s)) > 1e-9);
   if (clean.length === 0) return [];
-  /**
-   * 先批量并一次。
-   *
-   * `surfaceUnion` 内部就是"一次布尔并完"，比逐对合并快一到两个数量级
-   * （逐对：每条新区间都要跟累积体求交，多边形越滚越大）。
-   * 只有在批量失败时才退回逐对 —— 逐对的成功率略高，但慢得多。
-   */
+  if (clean.length === 1) return clean;
+  if (USE_CLIPPER) {
+    try {
+      const q = unionSurfaceSet(clean).filter((s) => M2(surfaceArea(s)) > 1);
+      if (q.length > 0) return q;
+    } catch {
+      /* 落到下面老路径 */
+    }
+  }
+  return unionPolysLegacy(clean);
+}
+
+/** 老的并集（polygon-clipping 逐对 + 微偏移重试），只在 Clipper2 失败时使用 */
+function unionPolysLegacy(list: PlanSurface[]): PlanSurface[] {
+  const clean = list;
   if (clean.length > 1) {
     try {
       const out = surfaceUnion(clean).filter((s) => M2(surfaceArea(s)) > 1);

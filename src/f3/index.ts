@@ -111,7 +111,8 @@ export function runF3City(input: CitySpec): CityResult {
   //
   // 路口、转角圆弧、尽端回车场全都在 road.domain 里，一次布尔差即可；
   // 不再有「reserve 之外再单独减 corner 片」这种两套几何各算各的做法。
-  const blockRes = buildBlocks(spec, preset, road.domain, streets.graph);
+  // 扣街区用未裁的那一份：切口是正面积，街区不会顺着红线上的发丝缝连成一片
+  const blockRes = buildBlocks(spec, preset, road.cutDomain ?? road.domain, streets.graph);
   notes.push(...blockRes.notes);
   clock('blocks');
 

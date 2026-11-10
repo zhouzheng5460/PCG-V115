@@ -12,10 +12,14 @@ import {
   insideSurface,
   surfaceArea,
   surfaceIntersect,
+  surfaceOffset,
+  surfaceOffsetSet,
   surfaceSubtract,
+  surfaceUnion,
   type PlanSurface,
 } from '../town/planning/core/surface';
 import { makeRng, obbOf, splitSurfaceByLine } from '../town/planning/subdivision/geom';
+import { splitPinched } from '../core/clipper';
 import { M2, U, areaM2, distPointToPolyline, polyLen, shapeOf } from './geom';
 import { binarySplit } from './lotsplit';
 import type { BuildingParcel, CityBlock, CitySpec, PathGraph, RoadPath, StylePreset } from './types';
@@ -36,6 +40,46 @@ const USE_FROM_PROGRAM: Record<string, CityBlock['use'][]> = {
   mixed: ['residential', 'commercial', 'cbd'],
 };
 
+/**
+ * 街区 = **场地 − 路网面**，但要在"放大一点点的场地"里减。
+ *
+ * 为什么不能直接 `场地 − 路网面`：路网面是**精确裁在红线上的**，布尔引擎
+ * 按 0.7 mm 量化之后路面与红线不再共边，两者之间会留一条发丝缝，街区就顺着
+ * 缝连成一片（实测：结构化城市 20 个街区并成 11 个，最大一块包住整个场地、
+ * 只有 11 个顶点）。缝宽只有零点几毫米，面积上看不出来，拓扑上却是灾难。
+ *
+ * 做法：场地先外扩 2 m 再减 —— 这样路面一定"穿过"外扩后的边界，切口是正的；
+ * 最后裁回原红线。对红线以内的点，(放大 − 路网) ∩ 红线 ≡ 红线 − 路网，
+ * 所以**街区形状一点没变**，变的只有拓扑（该分开的分开了）。
+ */
+function cutBlocks(site: PlanSurface, reserve: PlanSurface[]): PlanSurface[] {
+  const blocks = surfaceSubtract([site], reserve);
+  return splitBlocks(blocks.length ? blocks : [site]);
+}
+
+/**
+ * 把"单点相接"的街区环拆回独立街区。
+ *
+ * Clipper2 不拆自触环：两块地只在红线或路口处共用一个点时，它回一个"8"字环
+ * → 两块地算一块（实测 R01 样板：两个街区并成 15259 m²，被判成 park、0 栋楼）。
+ * 这里按重复顶点拆开，洞按"洞心落在哪个新环里"重新归属。
+ */
+function splitBlocks(list: PlanSurface[]): PlanSurface[] {
+  const out: PlanSurface[] = [];
+  for (const s of list) {
+    const rings = splitPinched(s.outer);
+    if (rings.length <= 1) {
+      out.push(s);
+      continue;
+    }
+    for (const r of rings) {
+      const holes = s.holes.filter((h) => insideSurface(centroidOf(h), { outer: r, holes: [] }));
+      out.push({ outer: r, holes });
+    }
+  }
+  return out;
+}
+
 export function buildBlocks(
   spec: CitySpec,
   preset: StylePreset,
@@ -48,7 +92,7 @@ export function buildBlocks(
   const notes: string[] = [];
   let blocks: PlanSurface[] = [spec.boundary];
   try {
-    blocks = surfaceSubtract([spec.boundary], reserve);
+    blocks = cutBlocks(spec.boundary, reserve);
   } catch {
     notes.push('街区扣减失败：道路用地布尔异常，退回整个场地（不静默当成功）');
     blocks = [spec.boundary];
@@ -90,7 +134,8 @@ export function buildBlocks(
   const out: CityBlock[] = pieces.map((s, i) => {
     const c = centroidOf(s.outer);
     const near = nearestPath(graph, c);
-    const centerDist = Math.hypot(c.x - cx, c.y - cy) / maxD;
+    // 质心退化（轮廓为空/退化）时给中值：NaN 会一路传进层数公式，最后整城 gfa = NaN
+    const centerDist = Number.isFinite(c.x) && Number.isFinite(c.y) ? Math.hypot(c.x - cx, c.y - cy) / maxD : 0.5;
     return {
       id: `B${i + 1}`,
       surface: s,
