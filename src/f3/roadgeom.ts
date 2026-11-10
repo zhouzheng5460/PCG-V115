@@ -1155,6 +1155,18 @@ export function buildRoadGeom(
         const d = (n.at.x - p.x) ** 2 + (n.at.y - p.y) ** 2;
         return d <= n.r * n.r;
       });
+    /**
+     * 出路口的那一段不算路缘 —— 它是"口线"（路在这里继续）。
+     *
+     * 少了这一步，整圈都会落在"路口附近"里、被判成路缘，于是首尾相接成**闭合环**：
+     * 白带把整圈内部填满，一层标线就变成盖住街区的大面（用户截图里那些巨块）。
+     * 判据：往**外侧**探 0.5 m，还是沥青 → 说明外面接着路，是口线。
+     */
+    const inAsphalt = (p: Pt): boolean =>
+      [...drive].some((q) => {
+        const b = bboxOf(q.outer);
+        return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY && insideSurface(p, q);
+      });
     /** 太短的碎段不画（让开区可能重叠，重叠处会切出 1~2 cm 的小段） */
     const MIN_RUN_M = 1.2;
     for (const s of inner) {
@@ -1163,29 +1175,52 @@ export function buildRoadGeom(
         if (n < 3) continue;
         let run: Pt[] = [];
         const flush = (): void => {
+          /**
+           * **绝不允许闭合环**。
+           *
+           * 一段路缘线是"开口"的折线（两端都断在口线上）。一旦首尾相接，
+           * 下游 `junctionEdgeMarks` 会把它按 15 cm 白带展开 —— 闭合折线展出来的
+           * 是一条**宽环**，它把整圈内部都填满：一层标线就变成盖住街区的大面
+           * （用户截图里那些巨块，单段能到 50 m² / 668 m）。
+           * 万一真的绕回起点（整圈都被判成路缘），砍掉末点让它开口。
+           */
+          if (run.length >= 3 && Pt.distance(run[0], run[run.length - 1]) < U(0.2)) run.pop();
           if (run.length >= 2 && polyLenM(run) >= MIN_RUN_M) jArcs.push(run);
           run = [];
         };
-        // 从"第一段不在路口里"的地方起头，避免跨过环起点被切成两段
-        let start = 0;
-        for (let i = 0; i < n; i++) {
+        /**
+         * 逐段的"是不是路缘"：
+         *   · 要落在路口附近（否则那是直路段的边缘线，已有 `edge` 标线管）；
+         *   · 而且外侧不能还是沥青（否则是口线）。
+         */
+        const isCurb = (i: number): boolean => {
           const a = ring[i];
           const b = ring[(i + 1) % n];
           const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
-          if (!inJunction(mid)) {
+          if (!inJunction(mid)) return false;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const L = Math.hypot(dx, dy) || 1;
+          // 外法线（环已统一为 CCW）：(dy, -dx)
+          const out = new Pt(dy / L, -dx / L);
+          return !inAsphalt(new Pt(mid.x + out.x * U(0.5), mid.y + out.y * U(0.5)));
+        };
+        // 从"第一段不是路缘"的地方起头，避免跨过环起点被切成两段
+        let start = 0;
+        for (let i = 0; i < n; i++) {
+          if (!isCurb(i)) {
             start = (i + 1) % n;
             break;
           }
         }
         for (let step = 0; step < n; step++) {
           const i = (start + step) % n;
-          const a = ring[i];
-          const b = ring[(i + 1) % n];
-          const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
-          if (!inJunction(mid)) {
+          if (!isCurb(i)) {
             flush();
             continue;
           }
+          const a = ring[i];
+          const b = ring[(i + 1) % n];
           if (run.length === 0) run.push(a);
           run.push(b);
         }

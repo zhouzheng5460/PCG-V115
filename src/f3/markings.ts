@@ -112,6 +112,12 @@ export interface MarkingResult {
 const CLASS_RANK: Record<RoadClass3, number> = { arterial: 3, collector: 2, local: 0 };
 /** 标线标准宽度（GB 5768.3）：15 cm —— 这里是**半宽**，写成 15 cm 会让双黄线重叠 */
 const LW = U(0.15) / 2;
+
+/**
+ * 被"标线自检"丢掉的段数（诊断用，不参与几何）。
+ * 正常情况下应当是 0；非 0 说明某个生成器吐了闭合环/自交折线。
+ */
+export let markingDroppedCount = 0;
 /** 车道宽（米）—— 只用于旧接口的兜底，真实车道由 lanes.ts 给出 */
 const LANE_W = U(3.5);
 
@@ -615,9 +621,42 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
    * 相邻臂的斑马线里（实测截图里那条斜穿斑马线的白线就是这么来的）。
    */
   const blockers = [...(opts.blockers ?? []), ...crossZones];
-  const segs = blockers.length ? clearJunction(clipped, blockers) : clipped;
+  const segsRaw = blockers.length ? clearJunction(clipped, blockers) : clipped;
   lap('让开路口');
-  return { segs, crossings, eligible: eligible.length };
+  /**
+   * **最后一道不变量**：标线必须是"带"，不能是"面"。
+   *
+   * 一条标线的面积应该约等于 `中心线长 × 0.15 m`。一旦某一段的面积远超这个值，
+   * 说明它被生成成了**闭合环 / 自交折线**，展开后是一块面 —— 只留"道路标线"这一层
+   * 看的时候，它会把整片地糊住（用户截图里那些十几米宽的长条和圆角巨块）。
+   *
+   * 这里统一兜住：不论上游哪个生成器吐的，超过 `周长/2 × 0.15 × 6` 就丢掉，
+   * 并在 `notes` 里留一句（不允许静默）。
+   */
+  const keep: typeof segsRaw = [];
+  let dropped = 0;
+  let droppedArea = 0;
+  let droppedKinds = new Set<string>();
+  for (const m of segsRaw) {
+    let per = 0;
+    for (let i = 0; i < m.ring.length; i++) per += Pt.distance(m.ring[i], m.ring[(i + 1) % m.ring.length]);
+    const expect = (per / 2) * LW * 2; // 带宽 = 2·LW
+    const actual = Math.abs(ringAreaOf(m.ring));
+    if (expect > 1e-9 && actual > expect * 6) {
+      dropped++;
+      droppedArea += actual * 49;
+      droppedKinds.add(m.kind ?? '?');
+      continue;
+    }
+    keep.push(m);
+  }
+  if (dropped > 0 && typeof process !== 'undefined' && process.env?.F3_MK) {
+    console.log(
+      `[mk] 自检丢弃 ${dropped} 段"面状"标线（${[...droppedKinds].join('/')}，共 ${droppedArea.toFixed(0)} m²）`
+    );
+  }
+  markingDroppedCount = dropped;
+  return { segs: keep, crossings, eligible: eligible.length };
 }
 
 /**
@@ -636,7 +675,19 @@ function junctionEdgeMarks(arcs: Pt[][]): MarkSeg[] {
     // 2 点也算（路口转角边线现在按边拆成短直段，弧长由调用方控制）
     if (arc.length < 2) continue;
     const ring = band(arc, 0, polyLen(arc), 0, LW);
-    if (ring) out.push({ ring, yellow: false, kind: 'jedge' });
+    if (!ring) continue;
+    /**
+     * **几何自检**：一条 15 cm 宽的白带，面积应该 ≈ 长度 × 0.15。
+     *
+     * 超过 2.5 倍说明这条折线自己绕回去了（闭合环/自交），展出来的不是带而是
+     * 一块面 —— 它会把整圈内部填满，视觉上就是"标线变成盖住街区的大面"。
+     * 这种段直接丢：宁可少画一段线，也不能让一层标线糊住整片地。
+     */
+    // LW 是**半宽**（0.075 m），带宽 = 2·LW
+    const expect = polyLen(arc) * LW * 2;
+    const actual = Math.abs(ringAreaOf(ring));
+    if (expect > 1e-9 && actual > expect * 2.5) continue;
+    out.push({ ring, yellow: false, kind: 'jedge' });
   }
   return out;
 }

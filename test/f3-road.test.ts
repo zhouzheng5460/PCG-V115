@@ -216,6 +216,35 @@ const stray = road.markings.filter((m) => {
 ok('④ 标线全部落在车行面 / 路口内（裁剪生效）', stray <= road.markings.length * 0.02,
   `${stray} / ${road.markings.length} 段越界`);
 
+/**
+ * 标线必须是**带**，不能是**面**。
+ *
+ * 判据：面积 / (周长/2 × 0.15 m) —— 一条 15 cm 宽的带子这个比值应该 ≈ 1；
+ * 实心条（停止线）≈ 3；超过 6 就说明它被生成成了闭合环或自交折线，展开后是
+ * 一块面 —— 只开"道路标线"这一层看的时候，它会把整片地糊住（用户截图里那些
+ * 十几米宽的长条和圆角巨块）。
+ */
+{
+  let blobs = 0;
+  let worst = 0;
+  let worstKind = '';
+  for (const m of road.markings) {
+    let per = 0;
+    for (let i = 0; i < m.ring.length; i++) per += Pt.distance(m.ring[i], m.ring[(i + 1) % m.ring.length]) * 7;
+    const expect = (per / 2) * 0.15;
+    const actual = M2(Math.abs(surfaceArea({ outer: m.ring, holes: [] })));
+    if (expect < 1e-6) continue;
+    const ratio = actual / expect;
+    if (ratio > 6) blobs++;
+    if (ratio > worst) {
+      worst = ratio;
+      worstKind = m.kind ?? '?';
+    }
+  }
+  ok('④ 没有"面状"标线（不会有填充面糊住街区）', blobs === 0,
+    `块状 ${blobs} 段 / 共 ${road.markings.length} 段 · 最差 ${worstKind} ${worst.toFixed(1)}×`);
+}
+
 {
   // 路口内必须有一圈路缘石边线（沿转角圆弧），且都贴着路口面边界
   const jedge = road.markings.filter((m) => m.kind === 'jedge');
