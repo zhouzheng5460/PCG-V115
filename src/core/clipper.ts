@@ -265,24 +265,3 @@ export function splitPinched(ring: Pt[]): Pt[][] {
   return out;
 }
 
-/**
- * 闭运算：`外扩 r` 再 `内缩 r`（形态学 closing）。
- *
- * 用途：**填掉布尔运算留下的小缺口**。两条路带在路口交错时，边界上常出现
- * 1~1.5 m 宽的小 notch（俯视图看就是"折两下再拐进去"的台阶），它们是布尔
- * 结果里真实的几何，删不掉也没法靠参数避开。
- *
- * 为什么闭运算正好合适：
- *   · 直边：外扩再内缩回到原位，宽度一点不变；
- *   · 已经存在的圆弧（半径 ≥ r）：外扩成 R+r、内缩回 R，还是原来那条弧；
- *   · **凹角**（缺口）：外扩把缺口填平，内缩不会把它挖回来 —— 缺口消失；
- *   · 凸角：外扩成圆角、内缩变回尖角 —— 也不会被"磨圆"。
- * 所以它只删"比 r 窄的缺口"，不动别的。r 取 0.7 m：只吃 1.4 m 以内的缺口，
- * 远小于任何真实要素（最窄的人行道也有 2 m）。
- */
-export function closeSurfaceSet(list: RingSurface[], rU: number, opts: OffsetOpts = {}): RingSurface[] {
-  if (list.length === 0 || rU <= 0) return list;
-  const grown = offsetSurfaceSet(list, rU, opts);
-  if (grown.length === 0) return list;
-  return offsetSurfaceSet(grown, -rU, opts);
-}
