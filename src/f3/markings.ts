@@ -22,6 +22,8 @@
 //   · 不画"BUS"字样：需要文字排版，属于贴图/纹理层，不属于几何标线。
 
 import { Pt } from '../core/geom';
+import { unionSurfaceSet } from '../core/clipper';
+import { selfIntersects } from '../town/planning/core/surface';
 import type { PathGraph, RoadClass3, RoadPath, RoadSection } from './types';
 import { M2, U, cleanRing, polyLen } from './geom';
 import { assignTurns, lanePointAt, lanesOfSide, lanesPerDir, maneuversOf, type Lane, type Turn } from './lanes';
@@ -636,6 +638,7 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
   const keep: typeof segsRaw = [];
   let dropped = 0;
   let droppedArea = 0;
+  let healed = 0;
   let droppedKinds = new Set<string>();
   for (const m of segsRaw) {
     let per = 0;
@@ -648,11 +651,35 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
       droppedKinds.add(m.kind ?? '?');
       continue;
     }
+    /**
+     * **自交环必须修掉** —— 这是"标线变成面"的真正元凶。
+     *
+     * 白带是沿折线展开的：折线一旦几乎绕回起点（路口边线走完整圈），带子的
+     * 两端会互相压过去，得到一个自交环。它的**面积**很小（所以躲得过上面那道
+     * 面积检查），但**三角化会把自交区当内部填满** —— 渲染出来就是一块盖住街区
+     * 的大面。实测 4649 段里 217 段是这种。
+     *
+     * 修法：交给 Clipper 的非零绕数并集归一化，自交环会被拆成简单环；
+     * 一个环拆成多片时逐片放回（都是这片白带的一部分）。
+     */
+    if (selfIntersects(m.ring)) {
+      const fixed = unionSurfaceSet([{ outer: m.ring, holes: [] }]).filter(
+        (q) => q.outer.length >= 3 && Math.abs(ringAreaOf(q.outer)) > 1e-9
+      );
+      if (fixed.length === 0) {
+        dropped++;
+        droppedKinds.add(m.kind ?? '?');
+        continue;
+      }
+      healed++;
+      for (const q of fixed) keep.push({ ...m, ring: q.outer });
+      continue;
+    }
     keep.push(m);
   }
   if (dropped > 0 && typeof process !== 'undefined' && process.env?.F3_MK) {
     console.log(
-      `[mk] 自检丢弃 ${dropped} 段"面状"标线（${[...droppedKinds].join('/')}，共 ${droppedArea.toFixed(0)} m²）`
+      `[mk] 自检：修复自交 ${healed} 段 · 丢弃"面状" ${dropped} 段（${[...droppedKinds].join('/')}，共 ${droppedArea.toFixed(0)} m²）`
     );
   }
   markingDroppedCount = dropped;

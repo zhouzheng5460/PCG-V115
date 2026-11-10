@@ -21,6 +21,8 @@ import { buildRoadGeom, unionPolys, type RoadGeom } from './roadgeom';
 import { growStreets } from './grow';
 import { growStreetsTensor } from './tensorgrow';
 import { applyZonesToCity } from './zoneapply';
+import { unionSurfaceSet } from '../core/clipper';
+import { selfIntersects } from '../town/planning/core/surface';
 import {
   DENSITY_PRESETS,
   STYLE_PRESETS,
@@ -631,6 +633,37 @@ export function runF3City(input: CitySpec): CityResult {
   notes.push(
     `道路分层面积（同一张路网面的差集，互不重叠）：车行 ${road.roadAreaM2.toFixed(0)} / 路口 ${road.junctionAreaM2.toFixed(0)} / 人行 ${road.walkAreaM2.toFixed(0)}（其中转角平台 ${apronAreaM2.toFixed(0)}）/ 绿带 ${road.vergeAreaM2.toFixed(0)} m²；路缘 ${road.curb.length} 片`
   );
+
+  /**
+   * **场景卫生：自交的面必须归一化。**
+   *
+   * 自交环（"8"字、或者带子两端互相压过去）在三角化时会把自交围出来的区域当作
+   * 内部填满 —— 渲染出来是一块**盖住邻接街区的面**。而它的 shoelace 面积可能
+   * 很小（实测标线那 217 段，面积都只有几十 m²），所以"面积别太大"这类校验
+   * 根本发现不了。
+   *
+   * 统一在这里过一遍：自交的环交给 Clipper 用非零绕数归一化成简单环，拆成多片
+   * 就逐片放回（每片都保留原来的 group / mat / name / y）。
+   */
+  {
+    const clean: typeof scene.surfaces = [];
+    let fixedCount = 0;
+    for (const sf of scene.surfaces) {
+      const dirty = selfIntersects(sf.ring) || (sf.holes ?? []).some((h) => selfIntersects(h));
+      if (!dirty) {
+        clean.push(sf);
+        continue;
+      }
+      const fixed = unionSurfaceSet([{ outer: sf.ring, holes: sf.holes ?? [] }]).filter((q) => q.outer.length >= 3);
+      if (fixed.length === 0) continue;
+      fixedCount++;
+      for (const q of fixed) clean.push({ ...sf, ring: q.outer, holes: q.holes });
+    }
+    if (fixedCount > 0) {
+      scene.surfaces = clean;
+      notes.push(`场景卫生：${fixedCount} 片自交面已归一化（自交会被三角化填成一块盖住街区的大面）`);
+    }
+  }
 
   const base: CityResult = {
     spec,
