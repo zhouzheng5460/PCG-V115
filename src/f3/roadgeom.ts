@@ -10,7 +10,7 @@
 
 import { Pt } from '../core/geom';
 import { bufferPolyline } from '../core/polyline';
-import { intersectSurfaceSet, offsetSurfaceSet, subtractSurfaceSet, unionSurfaceSet } from '../core/clipper';
+import { closeSurfaceSet, intersectSurfaceSet, offsetSurfaceSet, subtractSurfaceSet, unionSurfaceSet } from '../core/clipper';
 import {
   bboxOf,
   distToSurfaceEdge,
@@ -1132,9 +1132,24 @@ export function buildRoadGeom(
   const buildJunctionCurbs = (): void => {
     // 与车道边缘线**同一个**内缩量：两段线是同一条白线的两截，差一点就会错台阶
     const d = U(EDGE_INSET_M);
+    /**
+     * 内缩之前先把沥青**缝起来**（闭运算，填 ≤2 m 的缝）。
+     *
+     * `carriage ∪ junction` 里残留着一批透镜状细缝（布尔运算的正常产物）。
+     * 直接内缩会把**缝隙的边界**也描出来 —— 于是路口中间的沥青上浮着一段白线，
+     * 甚至一个闭合的"眼睛"（用户红圈里那两处）。缝隙宽 0.5~2 m，闭运算正好填掉，
+     * 而直边和已有的圆弧完全不受影响。
+     */
+    let asphaltSolid: PlanSurface[] = [];
+    try {
+      asphaltSolid = closeSurfaceSet(drive, U(1.0));
+      if (asphaltSolid.length === 0) asphaltSolid = drive;
+    } catch {
+      asphaltSolid = drive;
+    }
     let inner: PlanSurface[] = [];
     try {
-      inner = surfaceOffsetSet(drive, -d);
+      inner = surfaceOffsetSet(asphaltSolid, -d);
     } catch {
       return;
     }
@@ -1163,7 +1178,7 @@ export function buildRoadGeom(
      * 判据：往**外侧**探 0.5 m，还是沥青 → 说明外面接着路，是口线。
      */
     const inAsphalt = (p: Pt): boolean =>
-      [...drive].some((q) => {
+      [...asphaltSolid].some((q) => {
         const b = bboxOf(q.outer);
         return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY && insideSurface(p, q);
       });

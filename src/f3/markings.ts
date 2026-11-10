@@ -652,6 +652,29 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
       continue;
     }
     /**
+     * **浮在沥青中间的路缘线一律丢掉**。
+     *
+     * 内缩轮廓在"沥青缝隙"和"窄颈"处会生出小的内轮廓：它四周 0.5 m 全是沥青，
+     * 根本不在路缘上。俯视图里就是路口中间浮着一段白线、甚至一个闭合的"眼睛"。
+     * 这里用同一份判据做最后一道筛：8 个方向探 0.5 m，全是沥青 → 不在路缘上。
+     */
+    if (m.kind === 'jedge') {
+      const r = m.ring;
+      const cx = r.reduce((a, p) => a + p.x, 0) / r.length;
+      const cy = r.reduce((a, p) => a + p.y, 0) / r.length;
+      let enclosed = true;
+      for (let i = 0; i < 8 && enclosed; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const p = new Pt(cx + Math.cos(a) * U(0.5), cy + Math.sin(a) * U(0.5));
+        if (!asphalt.some((q) => insideSurface(p, q))) enclosed = false;
+      }
+      if (enclosed) {
+        dropped++;
+        droppedKinds.add('jedge-floating');
+        continue;
+      }
+    }
+    /**
      * **自交环必须修掉** —— 这是"标线变成面"的真正元凶。
      *
      * 白带是沿折线展开的：折线一旦几乎绕回起点（路口边线走完整圈），带子的

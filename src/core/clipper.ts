@@ -265,3 +265,19 @@ export function splitPinched(ring: Pt[]): Pt[][] {
   return out;
 }
 
+
+/**
+ * 闭运算：`外扩 r` 再 `内缩 r`（形态学 closing）。
+ *
+ * 用途：**填掉布尔运算留下的窄缝**。相邻两片沥青之间常留 0.5~2 m 的透镜状缝隙
+ * （它们既是真实的几何、又不可能靠调参避开）；缝隙的边界在轮廓上就是一圈
+ * "内轮廓"，任何沿轮廓描线的操作都会把它画出来 —— 表现为路口中间浮着一段白线。
+ * 闭运算只填比 2r 窄的缝隙、不动直边、也不改变已有的圆弧，
+ * 是清这类碎屑的标准手段。
+ */
+export function closeSurfaceSet(list: RingSurface[], rU: number, opts: OffsetOpts = {}): RingSurface[] {
+  if (list.length === 0 || rU <= 0) return list;
+  const grown = offsetSurfaceSet(list, rU, opts);
+  if (grown.length === 0) return list;
+  return offsetSurfaceSet(grown, -rU, opts);
+}
