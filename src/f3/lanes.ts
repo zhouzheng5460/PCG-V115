@@ -57,10 +57,19 @@ export function lanesPerDir(carriageM: number): number {
  * 早期版本这里写 `Math.max(U(3.5), sec.carriage / 2 - U(0.25))` —— 把 8.5
  * 直接当世界单位用，车道偏移变成 60 m，导向箭头全部落到街区里。
  */
+/**
+ * 边缘线离**物理车行面边界**的距离（米）。
+ *
+ * 这个数必须是**一个**：车道上沿臂画的边缘线、和路口转角沿圆弧画的路缘线
+ * 是同一条白线的两段，只是分段生成。差 0.17 m 就会在停止线处错一个台阶
+ * （实测路口线用 0.42、车道线用 0.25，接起来是个小折角）。
+ */
+export const EDGE_INSET_M = 0.25;
+
 export function lanesOfSide(sec: RoadSection, side: -1 | 1): Lane[] {
   const n = lanesPerDir(sec.carriage);
   const half = U(sec.carriage / 2);
-  const usable = Math.max(U(LANE_W_M), half - U(0.25));
+  const usable = Math.max(U(LANE_W_M), half - U(EDGE_INSET_M));
   // 车道均匀填满可用半幅：宽路上每车道会比 3.5 m 略宽，窄路上略窄，
   // 但**边界永远落在物理车行面之内**（否则分界线会压到人行道上）。
   const w = usable / n;

@@ -10,7 +10,7 @@
 
 import { Pt } from '../core/geom';
 import { bufferPolyline } from '../core/polyline';
-import { intersectSurfaceSet, subtractSurfaceSet, unionSurfaceSet } from '../core/clipper';
+import { intersectSurfaceSet, offsetSurfaceSet, subtractSurfaceSet, unionSurfaceSet } from '../core/clipper';
 import {
   bboxOf,
   distToSurfaceEdge,
@@ -20,6 +20,7 @@ import {
   surfaceArea,
   surfaceIntersect,
   surfaceOffset,
+  surfaceOffsetSet,
   surfaceSubtract,
   surfaceUnion,
   surfaceUnionLegacy,
@@ -37,7 +38,7 @@ import {
 import { filletConcave, filletConvex, removeHairpins, roundDomainAll, simplifyPolyline } from './rounding';
 import type { PathGraph, RoadClass3, RoadPath, RoadSection, StylePreset } from './types';
 
-import { buildJunctionManeuvers } from './lanes';
+import { EDGE_INSET_M, buildJunctionManeuvers } from './lanes';
 import {
   buildMarkings,
   MIN_CROSSING_GAP_M,
@@ -853,7 +854,18 @@ export function buildRoadGeom(
    */
   const arcSegsFor = (rrU: number): number => {
     const arcLenM = Math.PI * 0.5 * rrU * 7; // 按 90° 估
-    return Math.max(6, Math.min(20, Math.ceil(arcLenM / 2.6)));
+    /**
+     * 每段目标弧长 **1.0 m**（原来 2.6 m）。
+     *
+     * 2.6 m 在 6 m 半径的街角上只有 4 段（下限又抬到 6 段）→ 90° 的弧被切成
+     * 6 条弦，每段转角 15°，俯视特写下就是**多边形**，而沿它画的路缘标线
+     * 自然也是折线（用户连续三次指出"弧形标线是折线"）。
+     * 标线没法比它所在的边界更圆 —— 边界有多少段，线就只有多少段。
+     *
+     * 1.0 m 在 6 m 半径上给 10 段（每段 9°）、12 m 半径给 19 段，
+     * 特写下已经读不出折线。
+     */
+    return Math.max(8, Math.min(48, Math.ceil(arcLenM / 1.0)));
   };
   const roundWith = (list: PlanSurface[], r: (v: Pt) => number): PlanSurface[] => {
     // 半径是逐点的，段数按最大半径取一档，保证同一路口只用一种分段
@@ -1086,182 +1098,91 @@ export function buildRoadGeom(
   const carriage = cap(diff(drive, junction));
 
   /**
-   * 路口路缘石线（标线 `jedge`）—— 从**最终路口面**派生。
+   * 路口路缘石线（标线 `jedge`）= **沥青边界往内偏移一条线宽的位置**。
    *
-   * 为什么不能从"路口让开区"（starZone 的产物）派生：
-   * 最终路口面是 `车行面 ∩ 让开区`，街角那块没有被任何路带覆盖，会被裁掉；
-   * 按让开区画线，线就会伸进那块空地 5~7 m，在图上就是**飘在铺装上的白线**。
-   * 现在直接沿最终多边形的内边（内移 0.42 m）走，并且：
-   *   · 逐边判断"这条边是不是接着一条路"（往外探 0.8 m，落在车行面里就是口线）
-   *     —— 口线不画，所以每条路进出口处会干净地断开；
-   *   · 连续的非口线合成一条折线，一个转角一条（不会出现段与段之间的断口）。
+   * 上一版是从"路口面"的边界派生的：逐顶点沿法线内移 0.42 m，再 Chaikin 平滑两次。
+   * 画出来是**折线**，而且会顺着路口面的弦穿进路口（用户截图红圈里那个 V 形）。
+   * 原因是路口面 `B0 ∩ 让开区` 的边界**不是路缘** —— 它有一半是"口线"（路在这里
+   * 继续，横断线是直弦），拿它当路缘画，弦就变成了白线；而 Chaikin 只能磨角，
+   * 磨出来的仍是多边形。
+   *
+   * 现在按用户提的那条：**偏移下边界**。
+   *   · 沥青面 = `drive`（= 车行面 B0 = carriage ∪ junction），它的边界在转角处
+   *     就是圆弧，在路口喉部是连续的（根本不存在的"口线"问题）；
+   *   · 用 Clipper 把它整体内缩 0.42 m —— 偏移是**平行曲线**，圆弧还是圆弧，
+   *     不增点、不磨角，天生不会穿进沥青；
+   *   · 只保留落在路口让开区（`zones[0]`）里的那几段：直路段已经有车道边缘线，
+   *     这里只补路口转角这一圈。
+   *
+   * 于是这条线在几何上就是"路缘石的内侧 0.42 m"，和沥青边界处处平行；
+   * 它是不是折线，取决于沥青边界本身有多圆 —— 这一轮同时把转角弧的采样
+   * 从每段 2.6 m 加密到 1.0 m（`arcSegsFor`），两者一起才真正解决问题。
    */
   const buildJunctionCurbs = (): void => {
-    const d = U(0.42);
+    // 与车道边缘线**同一个**内缩量：两段线是同一条白线的两截，差一点就会错台阶
+    const d = U(EDGE_INSET_M);
+    let inner: PlanSurface[] = [];
+    try {
+      inner = surfaceOffsetSet(drive, -d);
+    } catch {
+      return;
+    }
+    if (inner.length === 0) return;
     /**
-     * 判"这条边是不是路缘"的判据：它是否**与车行面 B0 的某条边完全重合**。
+     * "这一段算不算路口转角"的判据：**到最近路口节点的距离 ≤ 该路口的转角范围**。
      *
-     * 为什么不用"往外探 0.8 m 看是不是落在车行面里"：
-     * 路口面本身是 `B0 ∩ 让开区`，边界由两部分拼成 —— 来自 B0 的那部分才是路缘，
-     * 来自让开区的那部分是"路在这里继续"（口线）。探点法在让开区比 B0 小的路口
-     * 上会全部判成口线（实测 12 个路口一条路缘线都没有）。
-     * 按"边重合"判，得到的是 B0 自己的那段圆弧 —— 细分和人行道完全同源。
+     * 不能用"落在让开区里"：让开区是星形（各臂横断线 + 相邻臂直连边），它的
+     * 转角边是**直弦**，正好把街角圆弧排除在外 —— 用它过滤会掉进和上一版一样的坑：
+     * 大的凸角上一条线都没有（实测 4 个转角只有 1 个有线）。
+     * 半径取"外圈转角半径 + 5 m"：既盖住整个圆弧，又不会把直路段的边缘线重复画一遍。
      */
-    /** B0 边索引：4 单位一格，判断"点是否落在 B0 边界上"只看附近几格 */
-    const cell = 4;
-    const grid = new Map<number, { ax: number; ay: number; bx: number; by: number }[]>();
-    const ckey = (ix: number, iy: number): number => (ix + 4096) * 8192 + (iy + 4096);
-    for (const s of drive) {
-      const r = s.outer;
-      for (let i = 0; i < r.length; i++) {
-        const a = r[i];
-        const b = r[(i + 1) % r.length];
-        const e = { ax: a.x, ay: a.y, bx: b.x, by: b.y };
-        for (let ix = Math.floor(Math.min(a.x, b.x) / cell); ix <= Math.floor(Math.max(a.x, b.x) / cell); ix++) {
-          for (let iy = Math.floor(Math.min(a.y, b.y) / cell); iy <= Math.floor(Math.max(a.y, b.y) / cell); iy++) {
-            const k = ckey(ix, iy);
-            const bin = grid.get(k);
-            if (bin) bin.push(e);
-            else grid.set(k, [e]);
+    const nodes = nodeW
+      .filter((n) => n.r > 0)
+      .map((n) => ({ at: n.at, r: Math.max(U(0.6), cornerRAt(n.at) + localW(n.at)[3]) + U(5) }));
+    const inJunction = (p: Pt): boolean =>
+      nodes.some((n) => {
+        const d = (n.at.x - p.x) ** 2 + (n.at.y - p.y) ** 2;
+        return d <= n.r * n.r;
+      });
+    /** 太短的碎段不画（让开区可能重叠，重叠处会切出 1~2 cm 的小段） */
+    const MIN_RUN_M = 1.2;
+    for (const s of inner) {
+      for (const ring of [s.outer, ...s.holes]) {
+        const n = ring.length;
+        if (n < 3) continue;
+        let run: Pt[] = [];
+        const flush = (): void => {
+          if (run.length >= 2 && polyLenM(run) >= MIN_RUN_M) jArcs.push(run);
+          run = [];
+        };
+        // 从"第一段不在路口里"的地方起头，避免跨过环起点被切成两段
+        let start = 0;
+        for (let i = 0; i < n; i++) {
+          const a = ring[i];
+          const b = ring[(i + 1) % n];
+          const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
+          if (!inJunction(mid)) {
+            start = (i + 1) % n;
+            break;
           }
         }
+        for (let step = 0; step < n; step++) {
+          const i = (start + step) % n;
+          const a = ring[i];
+          const b = ring[(i + 1) % n];
+          const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
+          if (!inJunction(mid)) {
+            flush();
+            continue;
+          }
+          if (run.length === 0) run.push(a);
+          run.push(b);
+        }
+        flush();
       }
     }
-    const carBoxes = carriage.map((q) => ({ q, b: bboxOf(q.outer) }));
-    const inCarriage = (p: Pt): boolean =>
-      carBoxes.some(({ q, b }) => p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY && insideSurface(p, q));
-
-    /** 点到 B0 边界的最短距离是否小于 tol（tol 用世界单位） */
-    const onB0 = (p: Pt, tol = U(0.05)): boolean => {
-      const bin = grid.get(ckey(Math.floor(p.x / cell), Math.floor(p.y / cell)));
-      if (!bin) return false;
-      for (const e of bin) {
-        const dx = e.bx - e.ax;
-        const dy = e.by - e.ay;
-        const L2 = dx * dx + dy * dy;
-        const t = L2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p.x - e.ax) * dx + (p.y - e.ay) * dy) / L2));
-        if (Math.hypot(p.x - (e.ax + dx * t), p.y - (e.ay + dy * t)) <= tol) return true;
-      }
-      return false;
-    };
-    for (const js of junction) {
-      const ring = js.outer;
-      const cnt = ring.length;
-      if (cnt < 3) continue;
-      const ccw = ringArea(ring) > 0;
-      const inwardOf = (p0: Pt, p1: Pt): Pt => {
-        const dx = p1.x - p0.x;
-        const dy = p1.y - p0.y;
-        const L = Math.hypot(dx, dy) || 1;
-        return ccw ? new Pt(-dy / L, dx / L) : new Pt(dy / L, -dx / L);
-      };
-      /** 顶点内移（斜接，最多 1.5d） */
-      const off: Pt[] = ring.map((v, i) => {
-        const prev = ring[(i - 1 + cnt) % cnt];
-        const next = ring[(i + 1) % cnt];
-        const n1 = inwardOf(prev, v);
-        const n2 = inwardOf(v, next);
-        let mx = n1.x + n2.x;
-        let my = n1.y + n2.y;
-        const ml = Math.hypot(mx, my);
-        if (ml < 1e-6) {
-          mx = n1.x;
-          my = n1.y;
-        } else {
-          mx /= ml;
-          my /= ml;
-        }
-        const cosHalf = Math.max(0.4, mx * n1.x + my * n1.y);
-        const k = Math.min(d / cosHalf, d * 1.5);
-        return new Pt(v.x + mx * k, v.y + my * k);
-      });
-      /**
-       * 逐边判口线：边的中点**不在 B0 边界上** = 口线（路从这里继续）。
-       * 用"中点是否贴 B0 边界"，不用端点相等：布尔运算出来的顶点坐标会有
-       * 1e-6 级差异，精确匹配永远对不上（实测 0 段命中）。
-       */
-      const mouthEdge: boolean[] = [];
-      for (let i = 0; i < cnt; i++) {
-        const a = ring[i];
-        const b = ring[(i + 1) % cnt];
-        const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
-        const n = inwardOf(a, b);
-        const probeOut = new Pt(mid.x - n.x * U(0.8), mid.y - n.y * U(0.8));
-        /**
-         * 两个判据取"或"：
-         *   ① 边中点贴在 B0 边界上 → 它来自车行面外轮廓，一定是路缘；
-         *   ② 往外 0.8 m 不是沥青 → 外面是铺装/街区，也是路缘。
-         * 只用 ①：布尔运算会把顶点重采样，个别路口一条边都对不上（实测只剩 20 段）；
-         * 只用 ②：让开区比 B0 小的那 12 个路口整圈被判成口线、一条线都没有。
-         */
-        const isCurb = onB0(mid) || !inCarriage(probeOut);
-        mouthEdge.push(!isCurb);
-      }
-      let run: Pt[] = [];
-      const flush = (): void => {
-        if (run.length < 2) {
-          run = [];
-          return;
-        }
-        /**
-         * 只留"外侧不是沥青"的折线。
-         *
-         * 路口面是 `B0 ∩ 让开区`，凸包偶尔在路口内部咬出一个凹口；那个凹口
-         * 也被车行面填着（看着还是一整块沥青），沿它画一圈线就成了**沥青中间
-         * 的一根孤线**（截图里那根悬空的小弧）。
-         * 判据：折线中点两侧 0.8 m 都还是沥青 → 它不在路缘上，丢掉。
-         */
-        const k = Math.floor(run.length / 2);
-        const a = run[Math.max(0, k - 1)];
-        const b = run[Math.min(run.length - 1, k)];
-        const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-        const nx = -(b.y - a.y) / L;
-        const ny = (b.x - a.x) / L;
-        const m = run[k];
-        const p1 = new Pt(m.x + nx * U(0.8), m.y + ny * U(0.8));
-        const p2 = new Pt(m.x - nx * U(0.8), m.y - ny * U(0.8));
-        const floating = inCarriage(p1) && inCarriage(p2);
-        /**
-         * 出口前做两次 Chaikin 平滑。
-         *
-         * 路口面的转角圆弧是**多边形**（分段数与道路面一致，通常 4~8 段），
-         * 直接沿线画出来就是折线（用户："更像折线，希望更圆一些"）。
-         * 标线是 15 cm 宽的贴地白线，平滑 1~2 次不会跑出沥青（偏移 < 0.2 m），
-         * 却能把转角读成圆弧 —— 几何（沥青面、街区）不动，只美化标线。
-         */
-        if (!floating) jArcs.push(chaikin(run, 2));
-        run = [];
-      };
-
-      // 从一条口线之后开始绕一圈，避免跨过环起点时被切成两段
-      let startIdx = 0;
-      for (let i = 0; i < cnt; i++) {
-        if (mouthEdge[i]) {
-          startIdx = (i + 1) % cnt;
-          break;
-        }
-      }
-      /** 顶点是否凹：凹点处两侧内移方向相反，连过去会横切过沥青 */
-      const concave = (i: number): boolean => {
-        const prev = ring[(i - 1 + cnt) % cnt];
-        const v = ring[i];
-        const next = ring[(i + 1) % cnt];
-        const cross = (v.x - prev.x) * (next.y - v.y) - (v.y - prev.y) * (next.x - v.x);
-        return ccw ? cross < -1e-9 : cross > 1e-9;
-      };
-      for (let step = 0; step < cnt; step++) {
-        const i = (startIdx + step) % cnt;
-        if (mouthEdge[i]) {
-          flush();
-          continue;
-        }
-        if (run.length === 0) run.push(off[i]);
-        run.push(off[(i + 1) % cnt]);
-        // 走到凹点/口线就断开：再连下去这条线会横切进沥青里（截图里那种斜穿线）
-        const nextIdx = (i + 1) % cnt;
-        if (mouthEdge[nextIdx] || concave(nextIdx)) flush();
-      }
-      flush();
+    if (typeof process !== 'undefined' && process.env?.F3_JEDGE) {
+      console.log(`[jedge] ${jArcs.length} 段 · 共 ${jArcs.reduce((k, r) => k + r.length, 0)} 点`);
     }
   };
   buildJunctionCurbs();
@@ -1718,24 +1639,9 @@ function riskyBand(pts: Pt[], h: number): boolean {
  * Chaikin 角切割平滑（端点保留）。
  * 输入 n 点 → 输出 2n-2 点，两轮之后折角基本消失。
  */
-function chaikin(pts: Pt[], rounds: number): Pt[] {
-  let cur = pts;
-  for (let r = 0; r < rounds; r++) {
-    if (cur.length < 3) return cur;
-    const out: Pt[] = [cur[0]];
-    for (let i = 0; i + 1 < cur.length; i++) {
-      const a = cur[i];
-      const b = cur[i + 1];
-      out.push(new Pt(a.x * 0.75 + b.x * 0.25, a.y * 0.75 + b.y * 0.25));
-      out.push(new Pt(a.x * 0.25 + b.x * 0.75, a.y * 0.25 + b.y * 0.75));
-    }
-    out.push(cur[cur.length - 1]);
-    cur = out;
-  }
-  return cur;
-}
-
-/** 折线上按 [0,1] 参数取点（总长为权） */
+// 这里原来有一个 `chaikin()`：路口路缘线靠它把折角磨圆。
+// 现在线由「沥青边界整体内缩」得到，边界本身多圆它就多圆，磨角这一步是多余的。
+// （真正的问题从来不是角不够圆，而是线沿错了边界 —— 沿「路口面」的弦画。）
 function lerpPoly(pts: Pt[], t: number): Pt {
   let total = 0;
   const segs: number[] = [];

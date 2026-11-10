@@ -220,20 +220,23 @@ ok('④ 标线全部落在车行面 / 路口内（裁剪生效）', stray <= roa
   // 路口内必须有一圈路缘石边线（沿转角圆弧），且都贴着路口面边界
   const jedge = road.markings.filter((m) => m.kind === 'jedge');
   /**
-   * 判据从"质心距边界"改成"**顶点**距边界"。
+   * 判据：**这条线必须贴着沥青边界**（内 0.25 m），不是贴着"路口面"边界。
    *
-   * 路口路缘线现在是一个转角一条**折线**（不再是 2 m 短段）：折线的质心会被
-   * 弦拉向路口内部，用质心判会误报；而"每个顶点都贴着边界"才是我们真正要的
-   * 性质（线不许飘到铺装上）。
+   * 上一版拿 `road.junction` 的边界当基准，正是病根：路口面是 `B0 ∩ 让开区`，
+   * 它的一半边界是"口线"（横穿路口的直弦）。沿它画线，弦就变成白线 ——
+   * 用户截图里那个穿过路口的 V 形折线。现在线由**沥青面 ∂B0 整体内缩**得到，
+   * 所以基准必须换成车行面：每个顶点到 `carriage ∪ junction` 的边界距离应≈0.25 m，
+   * 而且允许限度只有 ±0.35 m（超过就说明线飘到铺装上，或者又退回了沿弦画）。
    */
+  const asphalt = [...road.carriage, ...road.junction];
   let off = 0;
   for (const m of jedge) {
     let worst = 0;
     for (const p of m.ring) {
-      const best = Math.min(...road.junction.map((s) => distToSurfaceEdge(p, s)));
-      worst = Math.max(worst, best);
+      const best = Math.min(...asphalt.map((s) => distToSurfaceEdge(p, s)));
+      worst = Math.max(worst, Math.abs(best * 7 - 0.25));
     }
-    if (worst * 7 > 1.2) off++;
+    if (worst > 0.35) off++;
   }
   /**
    * 覆盖率按 **80%** 判，不要求"每个路口都有一条"：
@@ -249,7 +252,7 @@ ok('④ 标线全部落在车行面 / 路口内（裁剪生效）', stray <= roa
    */
   ok('④ 路口边线段数没有爆掉（< 路口数 × 6）', jedge.length < graph.junctions.length * 6,
     `${jedge.length} 段 / ${graph.junctions.length} 个路口`);
-  ok('④ 路口边线贴着路口面边界（没有飘到铺装上）', off <= jedge.length * 0.05,
+  ok('④ 路口边线贴着沥青边界内 0.25 m（没有飘到铺装上、也没有沿弦穿进路口）', off <= jedge.length * 0.05,
     `${off} / ${jedge.length} 段离边界 > 1.2 m`);
 }
 
