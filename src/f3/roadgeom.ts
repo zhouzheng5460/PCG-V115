@@ -174,6 +174,62 @@ export function buildRoadGeom(
   let lengthM = 0;
   for (const p of graph.paths) lengthM += polyLenM(p.pts);
 
+  /**
+   * 每个路口记下**能放得下的最大半径**，用它去压 `cornerRFor`。
+   *
+   * 为什么必须在这里压，而不是让 `filletConvex` 里面按"44% 边长"去夹：
+   * 四层（车行/路缘/人行/用地）是**各自**圆角化的，夹切距的公式是
+   * `t = r/tan(θ/2) ≤ 0.44·最短边`。锐角路口上 `r` 大到必须夹时，
+   * 四层的 `t` 都被夹到同一个上限 → `r = t·tan(θ/2)` 变成**同一个值** →
+   * 相邻两层（B1 / B2）的圆弧完全重合 → 它们之间的环带在转角处宽度归零，
+   * 于是人行道被挤成一个**尖刺**、或者干脆收成一个点（用户 0.28 km 截图里
+   * 红圈那些楔形）。大城里街区边长几十上百米，永远碰不到这个夹子，所以只在
+   * 小规模城市暴露。
+   *
+   * 现在改成"先把半径压到放得下"，四层就永远保持 `r, r+w1, r+w2, r+w3` 的
+   * 平行关系，不会再撞上内层夹子。
+   */
+  const nodeW = [...graph.nodes.values()].map((n) => {
+    let w: [number, number, number, number] = [0, 0, 0, 0];
+    let half = 0;
+    let minEdgeM = Infinity;
+    const dirs: number[] = [];
+    for (const eid of n.edges) {
+      const e = graph.edges.get(eid);
+      if (!e) continue;
+      const cw = sideW(e.cls);
+      if (cw[3] > w[3]) w = cw;
+      half = Math.max(half, widthOf(e.cls));
+      {
+        let len = 0;
+        for (let i = 0; i + 1 < e.pts.length; i++) len += Pt.distance(e.pts[i], e.pts[i + 1]);
+        minEdgeM = Math.min(minEdgeM, len * 7);
+      }
+      const pts = e.a === n.id ? e.pts : e.pts.slice().reverse();
+      const q = pts[Math.min(3, pts.length - 1)];
+      dirs.push(Math.atan2(q.y - n.at.y, q.x - n.at.x));
+    }
+    // 最窄的臂夹角 → 该路口最尖的那个角（转角的 tan(θ/2) 由它主导）
+    dirs.sort((a, b) => a - b);
+    let phi = Math.PI / 2;
+    for (let i = 0; i < dirs.length; i++) {
+      const d = ((dirs[(i + 1) % dirs.length] - dirs[i] + Math.PI * 2) % (Math.PI * 2));
+      phi = Math.min(phi, d);
+    }
+    const theta = Math.max(0.3, Math.min(Math.PI / 2, phi));
+    const w3M = w[3] * 7;
+    const edgeM = Number.isFinite(minEdgeM) ? minEdgeM : 60;
+    /**
+     * 42% 边长留给这一侧（两侧对称占 84%，中间还留一点直段）。
+     *
+     * 下限 9 m 是必须的：压到 5 m 时，锐角分叉口的人行道两侧弧会贴到一起，
+     * 变成一条**细丝**横在路口里（r=90 的 41° 分叉实测如此），比原来的台阶更难看。
+     * 9 m 既能让切线夹子基本不触发，又不会把转角压成针。
+     */
+    const fitM = Math.max(9, 0.42 * edgeM * Math.tan(theta / 2) - w3M);
+    return { at: n.at, w, r: Math.min(cornerRFor(half), fitM) };
+  });
+
   // ---------------- ① 路口入射方向（标线与让开区共用同一份）
   interface Approach {
     dir: Pt;
@@ -507,8 +563,18 @@ export function buildRoadGeom(
     const a3 = apps.map((A) => ({ ...A, outer: A.half + sideW(A.cls)[3] }));
     const cuts = junctionCutDistances(a3, node.at);
     const maxHalf = (k: number): number => Math.max(...apps.map((A) => A.half + sideW(A.cls)[k]));
-    /** 该路口的路缘转弯半径（按最宽臂的等级） */
-    const jR = U(cornerRFor(Math.max(...apps.map((A) => A.half))));
+    /**
+     * 该路口的路缘转弯半径 —— **必须与 `roundDomainAll` 用的是同一个数**。
+     *
+     * 这里原来直接取 `cornerRFor(最宽臂)`，没有走 `fitM` 的夹子；圆角化那边用的是
+     * `cornerRAt(v) = min(cornerRFor(最近路口), fitM)`。大城里 `fitM` 很大、两者
+     * 恰好相等，看不出问题；**小城里 `fitM` 把半径压小**，于是同一个转角被两套
+     * 半径各圆了一次：让开区按大半径鼓出去、路带按小半径收回来，交界处就跳出
+     * 1~2 m 的台阶 —— 用户红圈里那几处"折两下再拐进去"的缺口。
+     *
+     * `nodeW` 里的 `r` 就是最终生效的值（已含 `fitM`），直接取它。
+     */
+    const jR = U(nodeW.find((q) => q.at === node.at)?.r ?? cornerRFor(Math.max(...apps.map((A) => A.half))));
     /**
      * 绿带在**每条臂的收头处**垂直切断（真实道路：绿化到停止线前就结束）。
      *
@@ -741,61 +807,6 @@ export function buildRoadGeom(
    * three-roads 里这是 `minimumRadius` 的角色 —— 它按车道设计速度校验，
    * 我们这里退化成按断面宽度分档，但"等级越高、转角越大"的结论一致。
    */
-  /**
-   * 每个路口记下**能放得下的最大半径**，用它去压 `cornerRFor`。
-   *
-   * 为什么必须在这里压，而不是让 `filletConvex` 里面按"44% 边长"去夹：
-   * 四层（车行/路缘/人行/用地）是**各自**圆角化的，夹切距的公式是
-   * `t = r/tan(θ/2) ≤ 0.44·最短边`。锐角路口上 `r` 大到必须夹时，
-   * 四层的 `t` 都被夹到同一个上限 → `r = t·tan(θ/2)` 变成**同一个值** →
-   * 相邻两层（B1 / B2）的圆弧完全重合 → 它们之间的环带在转角处宽度归零，
-   * 于是人行道被挤成一个**尖刺**、或者干脆收成一个点（用户 0.28 km 截图里
-   * 红圈那些楔形）。大城里街区边长几十上百米，永远碰不到这个夹子，所以只在
-   * 小规模城市暴露。
-   *
-   * 现在改成"先把半径压到放得下"，四层就永远保持 `r, r+w1, r+w2, r+w3` 的
-   * 平行关系，不会再撞上内层夹子。
-   */
-  const nodeW = [...graph.nodes.values()].map((n) => {
-    let w: [number, number, number, number] = [0, 0, 0, 0];
-    let half = 0;
-    let minEdgeM = Infinity;
-    const dirs: number[] = [];
-    for (const eid of n.edges) {
-      const e = graph.edges.get(eid);
-      if (!e) continue;
-      const cw = sideW(e.cls);
-      if (cw[3] > w[3]) w = cw;
-      half = Math.max(half, widthOf(e.cls));
-      {
-        let len = 0;
-        for (let i = 0; i + 1 < e.pts.length; i++) len += Pt.distance(e.pts[i], e.pts[i + 1]);
-        minEdgeM = Math.min(minEdgeM, len * 7);
-      }
-      const pts = e.a === n.id ? e.pts : e.pts.slice().reverse();
-      const q = pts[Math.min(3, pts.length - 1)];
-      dirs.push(Math.atan2(q.y - n.at.y, q.x - n.at.x));
-    }
-    // 最窄的臂夹角 → 该路口最尖的那个角（转角的 tan(θ/2) 由它主导）
-    dirs.sort((a, b) => a - b);
-    let phi = Math.PI / 2;
-    for (let i = 0; i < dirs.length; i++) {
-      const d = ((dirs[(i + 1) % dirs.length] - dirs[i] + Math.PI * 2) % (Math.PI * 2));
-      phi = Math.min(phi, d);
-    }
-    const theta = Math.max(0.3, Math.min(Math.PI / 2, phi));
-    const w3M = w[3] * 7;
-    const edgeM = Number.isFinite(minEdgeM) ? minEdgeM : 60;
-    /**
-     * 42% 边长留给这一侧（两侧对称占 84%，中间还留一点直段）。
-     *
-     * 下限 9 m 是必须的：压到 5 m 时，锐角分叉口的人行道两侧弧会贴到一起，
-     * 变成一条**细丝**横在路口里（r=90 的 41° 分叉实测如此），比原来的台阶更难看。
-     * 9 m 既能让切线夹子基本不触发，又不会把转角压成针。
-     */
-    const fitM = Math.max(9, 0.42 * edgeM * Math.tan(theta / 2) - w3M);
-    return { at: n.at, w, r: Math.min(cornerRFor(half), fitM) };
-  });
   /** 该位置的路缘转弯半径（米 → 世界单位），按最近路口取 */
   const cornerRAt = (v: Pt): number => {
     let best = Infinity;
