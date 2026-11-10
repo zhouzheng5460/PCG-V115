@@ -540,8 +540,6 @@ export function buildRoadGeom(
    * 这里是唯一真值源，markings 只负责消费。
    */
   const faces = new Map<string, number>();
-  /** 各路口转角的圆弧中心线（已向沥青一侧挪 0.42 m），给标线画转角边线用 */
-  const jArcs: Pt[][] = [];
   /** 绿带禁入区：按《Houdini 路网》任意 N 叉的垂线收头线求，绿带在此收头 */
   const yieldZones: PlanSurface[] = [];
   /**
@@ -1109,144 +1107,15 @@ export function buildRoadGeom(
   const carriage = cap(diff(drive, junction));
 
   /**
-   * 路口路缘石线（标线 `jedge`）= **沥青边界往内偏移一条线宽的位置**。
+   * 路口路缘石线（`jedge`）**已移除**。
    *
-   * 上一版是从"路口面"的边界派生的：逐顶点沿法线内移 0.42 m，再 Chaikin 平滑两次。
-   * 画出来是**折线**，而且会顺着路口面的弦穿进路口（用户截图红圈里那个 V 形）。
-   * 原因是路口面 `B0 ∩ 让开区` 的边界**不是路缘** —— 它有一半是"口线"（路在这里
-   * 继续，横断线是直弦），拿它当路缘画，弦就变成了白线；而 Chaikin 只能磨角，
-   * 磨出来的仍是多边形。
+   * 它由"沥青边界内缩 0.25 m"派生，但沥青面里残留着 0.5~2 m 的透镜状细缝，
+   * 内缩会把缝隙边界一起描出来 —— 表现得像"环形破成了面"（浮空白线、闭合眼睛），
+   * 反复修了几轮仍有残余。白线本身也不是规范要求的要素（GB 5768.3 只要求
+   * 车道边缘线在路口前截断），所以直接去掉，路口只保留人行横道 / 停止线 / 导向箭头。
    *
-   * 现在按用户提的那条：**偏移下边界**。
-   *   · 沥青面 = `drive`（= 车行面 B0 = carriage ∪ junction），它的边界在转角处
-   *     就是圆弧，在路口喉部是连续的（根本不存在的"口线"问题）；
-   *   · 用 Clipper 把它整体内缩 0.42 m —— 偏移是**平行曲线**，圆弧还是圆弧，
-   *     不增点、不磨角，天生不会穿进沥青；
-   *   · 只保留落在路口让开区（`zones[0]`）里的那几段：直路段已经有车道边缘线，
-   *     这里只补路口转角这一圈。
-   *
-   * 于是这条线在几何上就是"路缘石的内侧 0.42 m"，和沥青边界处处平行；
-   * 它是不是折线，取决于沥青边界本身有多圆 —— 这一轮同时把转角弧的采样
-   * 从每段 2.6 m 加密到 1.0 m（`arcSegsFor`），两者一起才真正解决问题。
+   * `jArcs` 仍保留为空数组：`buildMarkings` 的入参形状不改，标线侧同步停用。
    */
-  const buildJunctionCurbs = (): void => {
-    // 与车道边缘线**同一个**内缩量：两段线是同一条白线的两截，差一点就会错台阶
-    const d = U(EDGE_INSET_M);
-    /**
-     * 内缩之前先把沥青**缝起来**（闭运算，填 ≤2 m 的缝）。
-     *
-     * `carriage ∪ junction` 里残留着一批透镜状细缝（布尔运算的正常产物）。
-     * 直接内缩会把**缝隙的边界**也描出来 —— 于是路口中间的沥青上浮着一段白线，
-     * 甚至一个闭合的"眼睛"（用户红圈里那两处）。缝隙宽 0.5~2 m，闭运算正好填掉，
-     * 而直边和已有的圆弧完全不受影响。
-     */
-    let asphaltSolid: PlanSurface[] = [];
-    try {
-      asphaltSolid = closeSurfaceSet(drive, U(1.0));
-      if (asphaltSolid.length === 0) asphaltSolid = drive;
-    } catch {
-      asphaltSolid = drive;
-    }
-    let inner: PlanSurface[] = [];
-    try {
-      inner = surfaceOffsetSet(asphaltSolid, -d);
-    } catch {
-      return;
-    }
-    if (inner.length === 0) return;
-    /**
-     * "这一段算不算路口转角"的判据：**到最近路口节点的距离 ≤ 该路口的转角范围**。
-     *
-     * 不能用"落在让开区里"：让开区是星形（各臂横断线 + 相邻臂直连边），它的
-     * 转角边是**直弦**，正好把街角圆弧排除在外 —— 用它过滤会掉进和上一版一样的坑：
-     * 大的凸角上一条线都没有（实测 4 个转角只有 1 个有线）。
-     * 半径取"外圈转角半径 + 5 m"：既盖住整个圆弧，又不会把直路段的边缘线重复画一遍。
-     */
-    const nodes = nodeW
-      .filter((n) => n.r > 0)
-      .map((n) => ({ at: n.at, r: Math.max(U(0.6), cornerRAt(n.at) + localW(n.at)[3]) + U(5) }));
-    const inJunction = (p: Pt): boolean =>
-      nodes.some((n) => {
-        const d = (n.at.x - p.x) ** 2 + (n.at.y - p.y) ** 2;
-        return d <= n.r * n.r;
-      });
-    /**
-     * 出路口的那一段不算路缘 —— 它是"口线"（路在这里继续）。
-     *
-     * 少了这一步，整圈都会落在"路口附近"里、被判成路缘，于是首尾相接成**闭合环**：
-     * 白带把整圈内部填满，一层标线就变成盖住街区的大面（用户截图里那些巨块）。
-     * 判据：往**外侧**探 0.5 m，还是沥青 → 说明外面接着路，是口线。
-     */
-    const inAsphalt = (p: Pt): boolean =>
-      [...asphaltSolid].some((q) => {
-        const b = bboxOf(q.outer);
-        return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY && insideSurface(p, q);
-      });
-    /** 太短的碎段不画（让开区可能重叠，重叠处会切出 1~2 cm 的小段） */
-    const MIN_RUN_M = 1.2;
-    for (const s of inner) {
-      for (const ring of [s.outer, ...s.holes]) {
-        const n = ring.length;
-        if (n < 3) continue;
-        let run: Pt[] = [];
-        const flush = (): void => {
-          /**
-           * **绝不允许闭合环**。
-           *
-           * 一段路缘线是"开口"的折线（两端都断在口线上）。一旦首尾相接，
-           * 下游 `junctionEdgeMarks` 会把它按 15 cm 白带展开 —— 闭合折线展出来的
-           * 是一条**宽环**，它把整圈内部都填满：一层标线就变成盖住街区的大面
-           * （用户截图里那些巨块，单段能到 50 m² / 668 m）。
-           * 万一真的绕回起点（整圈都被判成路缘），砍掉末点让它开口。
-           */
-          if (run.length >= 3 && Pt.distance(run[0], run[run.length - 1]) < U(0.2)) run.pop();
-          if (run.length >= 2 && polyLenM(run) >= MIN_RUN_M) jArcs.push(run);
-          run = [];
-        };
-        /**
-         * 逐段的"是不是路缘"：
-         *   · 要落在路口附近（否则那是直路段的边缘线，已有 `edge` 标线管）；
-         *   · 而且外侧不能还是沥青（否则是口线）。
-         */
-        const isCurb = (i: number): boolean => {
-          const a = ring[i];
-          const b = ring[(i + 1) % n];
-          const mid = new Pt((a.x + b.x) / 2, (a.y + b.y) / 2);
-          if (!inJunction(mid)) return false;
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const L = Math.hypot(dx, dy) || 1;
-          // 外法线（环已统一为 CCW）：(dy, -dx)
-          const out = new Pt(dy / L, -dx / L);
-          return !inAsphalt(new Pt(mid.x + out.x * U(0.5), mid.y + out.y * U(0.5)));
-        };
-        // 从"第一段不是路缘"的地方起头，避免跨过环起点被切成两段
-        let start = 0;
-        for (let i = 0; i < n; i++) {
-          if (!isCurb(i)) {
-            start = (i + 1) % n;
-            break;
-          }
-        }
-        for (let step = 0; step < n; step++) {
-          const i = (start + step) % n;
-          if (!isCurb(i)) {
-            flush();
-            continue;
-          }
-          const a = ring[i];
-          const b = ring[(i + 1) % n];
-          if (run.length === 0) run.push(a);
-          run.push(b);
-        }
-        flush();
-      }
-    }
-    if (typeof process !== 'undefined' && process.env?.F3_JEDGE) {
-      console.log(`[jedge] ${jArcs.length} 段 · 共 ${jArcs.reduce((k, r) => k + r.length, 0)} 点`);
-    }
-  };
-  buildJunctionCurbs();
   const curb = cap(diff(B[1], drive));
   const walkAll = cap(diff(B[2], [...B[1], ...drive]));
   // 绿带在路口按垂线收头，且转角整块让开（绿化不进转角，见 cornerZones）
@@ -1300,7 +1169,7 @@ export function buildRoadGeom(
    * 完全失效，3500 段标线每条都要跟这一整片做一次布尔 —— 实测 31.8 s。
    * 拆开的片每片只有一条街那么大，bbox 一筛就只剩 1~2 片。
    */
-  const mk = buildMarkings(graph, [...carriage, ...junction], { secOf, jApp, blockers: junction, faces, jArcs });
+  const mk = buildMarkings(graph, [...carriage, ...junction], { secOf, jApp, blockers: junction, faces });
   tick('markings');
   {
     let arms = 0;

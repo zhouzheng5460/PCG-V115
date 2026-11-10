@@ -13,7 +13,7 @@
 //   ③ 每条标线最后都要被**车行面裁一次**，并且**不许互相重叠**：
 //      线宽按 15 cm（半宽 7.5 cm）画，双黄线才留得出 15 cm 间隙；
 //      边缘线在人行横道处断开，不停在斑马线上。
-//   ④ 路口范围内的边缘线不是"没有"，而是**沿转角圆弧**画（`jedge`）：
+//   ④ 路口内不画边缘线（`jedge` 已移除，见文件末尾说明）：
 //      路口本身就是一张闭合面，它的边界就是路缘石线。
 //
 // 不做什么（写了原因，避免下次又加回来）：
@@ -56,7 +56,6 @@ export type MarkKind =
   | 'center'
   | 'lane'
   | 'edge'
-  | 'jedge'
   | 'stop'
   | 'cross'
   | 'arrow'
@@ -100,7 +99,6 @@ export interface MarkingOptions {
    */
   faces?: Map<string, number>;
   /** 路口转角圆弧的中心线（roadgeom 解析给出，已向沥青内挪 0.42 m） */
-  jArcs?: Pt[][];
 }
 
 export interface MarkingResult {
@@ -605,7 +603,6 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
   }
 
   // ---------------- ④ 路口内的路缘石边线（沿转角圆弧）
-  out.push(...junctionEdgeMarks(opts.jArcs ?? []));
   lap('①-④ 生成');
 
   if (typeof process !== 'undefined' && process.env?.F3_MK) {
@@ -652,29 +649,6 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
       continue;
     }
     /**
-     * **浮在沥青中间的路缘线一律丢掉**。
-     *
-     * 内缩轮廓在"沥青缝隙"和"窄颈"处会生出小的内轮廓：它四周 0.5 m 全是沥青，
-     * 根本不在路缘上。俯视图里就是路口中间浮着一段白线、甚至一个闭合的"眼睛"。
-     * 这里用同一份判据做最后一道筛：8 个方向探 0.5 m，全是沥青 → 不在路缘上。
-     */
-    if (m.kind === 'jedge') {
-      const r = m.ring;
-      const cx = r.reduce((a, p) => a + p.x, 0) / r.length;
-      const cy = r.reduce((a, p) => a + p.y, 0) / r.length;
-      let enclosed = true;
-      for (let i = 0; i < 8 && enclosed; i++) {
-        const a = (i / 8) * Math.PI * 2;
-        const p = new Pt(cx + Math.cos(a) * U(0.5), cy + Math.sin(a) * U(0.5));
-        if (!asphalt.some((q) => insideSurface(p, q))) enclosed = false;
-      }
-      if (enclosed) {
-        dropped++;
-        droppedKinds.add('jedge-floating');
-        continue;
-      }
-    }
-    /**
      * **自交环必须修掉** —— 这是"标线变成面"的真正元凶。
      *
      * 白带是沿折线展开的：折线一旦几乎绕回起点（路口边线走完整圈），带子的
@@ -719,28 +693,10 @@ export function buildMarkings(graph: PathGraph, asphalt: PlanSurface[], opts: Ma
  * 路口面自己的边界本来就等于路缘石线（它是由同一张闭合面派生的），
  * 沿它内缩一条白带，边线就自动跟着转角圆弧走，不需要再解析一次圆角。
  */
-function junctionEdgeMarks(arcs: Pt[][]): MarkSeg[] {
-  const out: MarkSeg[] = [];
-  for (const arc of arcs) {
-    // 2 点也算（路口转角边线现在按边拆成短直段，弧长由调用方控制）
-    if (arc.length < 2) continue;
-    const ring = band(arc, 0, polyLen(arc), 0, LW);
-    if (!ring) continue;
-    /**
-     * **几何自检**：一条 15 cm 宽的白带，面积应该 ≈ 长度 × 0.15。
-     *
-     * 超过 2.5 倍说明这条折线自己绕回去了（闭合环/自交），展出来的不是带而是
-     * 一块面 —— 它会把整圈内部填满，视觉上就是"标线变成盖住街区的大面"。
-     * 这种段直接丢：宁可少画一段线，也不能让一层标线糊住整片地。
-     */
-    // LW 是**半宽**（0.075 m），带宽 = 2·LW
-    const expect = polyLen(arc) * LW * 2;
-    const actual = Math.abs(ringAreaOf(ring));
-    if (expect > 1e-9 && actual > expect * 2.5) continue;
-    out.push({ ring, yellow: false, kind: 'jedge' });
-  }
-  return out;
-}
+// ```junctionEdgeMarks```（路口路缘石边线 `jedge`）已移除：它由"沥青边界内缩"
+// 派生，而沥青里残留的 0.5~2 m 透镜缝隙会让轮廓多出一圈内边界 —— 表现为
+// 路口中间浮着一段白线 / 一个闭合"眼睛"。修了几轮仍有残余，按用户决定直接去掉。
+// 路口只保留人行横道 / 停止线 / 导向箭头（GB 5768.3 并不要求路口内画边缘线）。
 
 /**
  * 环逐顶点内缩：CCW 环的"内侧"在每条有向边的左手边。
@@ -814,7 +770,7 @@ function ringAreaOf(ring: Pt[]): number {
  * 就变成结构性保证，不依赖每条臂的收头距离算得准不准。
  */
 function clearJunction(marks: MarkSeg[], blockers: PlanSurface[]): MarkSeg[] {
-  const keepInside = new Set(['cross', 'stop', 'arrow', 'jedge']);
+  const keepInside = new Set(['cross', 'stop', 'arrow']);
   const boxes = blockers.map((q) => ({ q, b: bboxOf(q.outer) }));
   const out: MarkSeg[] = [];
   for (const m of marks) {
@@ -1078,10 +1034,6 @@ function clipMarksToAsphalt(marks: MarkSeg[], asphalt: PlanSurface[]): MarkSeg[]
      * 横移，本来就在车行面内；路口边线（`jedge`）则是由路口面内缩得到的，
      * 位置同样有保证 —— 这两类直接放行，不裁形状、也不做质心检查。
      */
-    if (m.kind === 'jedge') {
-      out.push(m);
-      continue;
-    }
     if (m.kind === 'arrow') {
       const c = centroid(m.ring);
       if (boundary.insideAny(c, nearOf({ minX: c.x, minY: c.y, maxX: c.x, maxY: c.y }))) out.push(m);

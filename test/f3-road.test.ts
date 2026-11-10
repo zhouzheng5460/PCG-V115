@@ -203,10 +203,7 @@ ok('④ 主干路有公交专用道分界线（黄虚线）与减速标线',
 ok('④ 次干路有非机动车道线', byKind('bike').length > 0, `${byKind('bike').length} 段`);
 
 // 所有标线都要落在车行面内（裁剪生效，不留"半截白条压在绿地上"）。
-// 路口边线（jedge）单独判：它是"路口面边界往内 0.3 m"的条带，质心落在
-// 边界线附近，用质心内点判会有一半误报 —— 换成"到路口面边界的距离 < 1 m"。
 const stray = road.markings.filter((m) => {
-  if (m.kind === 'jedge') return false;
   const c = new Pt(
     m.ring.reduce((a, q) => a + q.x, 0) / m.ring.length,
     m.ring.reduce((a, q) => a + q.y, 0) / m.ring.length
@@ -247,42 +244,14 @@ ok('④ 标线全部落在车行面 / 路口内（裁剪生效）', stray <= roa
 
 {
   // 路口内必须有一圈路缘石边线（沿转角圆弧），且都贴着路口面边界
-  const jedge = road.markings.filter((m) => m.kind === 'jedge');
   /**
-   * 判据：**这条线必须贴着沥青边界**（内 0.25 m），不是贴着"路口面"边界。
+   * 路口内**不再有**路缘石边线（`jedge` 已按用户决定整类移除）。
    *
-   * 上一版拿 `road.junction` 的边界当基准，正是病根：路口面是 `B0 ∩ 让开区`，
-   * 它的一半边界是"口线"（横穿路口的直弦）。沿它画线，弦就变成白线 ——
-   * 用户截图里那个穿过路口的 V 形折线。现在线由**沥青面 ∂B0 整体内缩**得到，
-   * 所以基准必须换成车行面：每个顶点到 `carriage ∪ junction` 的边界距离应≈0.25 m，
-   * 而且允许限度只有 ±0.35 m（超过就说明线飘到铺装上，或者又退回了沿弦画）。
+   * 它由"沥青边界内缩"派生，而沥青里残留着 0.5~2 m 的透镜缝隙 —— 内缩会把缝隙
+   * 边界也描出来，表现为路口中间浮一段白线 / 一个闭合"眼睛"。修了几轮仍有残余；
+   * GB 5768.3 也不要求路口内画边缘线，所以直接去掉。
    */
-  const asphalt = [...road.carriage, ...road.junction];
-  let off = 0;
-  for (const m of jedge) {
-    let worst = 0;
-    for (const p of m.ring) {
-      const best = Math.min(...asphalt.map((s) => distToSurfaceEdge(p, s)));
-      worst = Math.max(worst, Math.abs(best * 7 - 0.25));
-    }
-    if (worst > 0.35) off++;
-  }
-  /**
-   * 覆盖率按 **80%** 判，不要求"每个路口都有一条"：
-   * 夹角很大 / 只有三条臂的路口，路口面会整个落在车行面内部（面积 113~226 m²），
-   * 那里本来就没有"路缘"可画（一圈都在沥青中间）。实测 85 个路口里 12 个属于这类。
-   */
-  ok('④ 路口有沿转角圆弧的路缘石边线', jedge.length > graph.junctions.length * 0.8,
-    `${jedge.length} 段 / ${graph.junctions.length} 个路口`);
-  /**
-   * 段数上限：路缘线是"一个转角一条折线"，正常每城 200 段上下。
-   * 上一版按 2 m 切段时是 2300+ 段，生成时间被拖慢 40% —— 这里设个天花板，
-   * 防止以后又退回"逐小段铺线"的写法。
-   */
-  ok('④ 路口边线段数没有爆掉（< 路口数 × 6）', jedge.length < graph.junctions.length * 6,
-    `${jedge.length} 段 / ${graph.junctions.length} 个路口`);
-  ok('④ 路口边线贴着沥青边界内 0.25 m（没有飘到铺装上、也没有沿弦穿进路口）', off <= jedge.length * 0.05,
-    `${off} / ${jedge.length} 段离边界 > 1.2 m`);
+  ok('④ 路口内没有路缘石边线（jedge 已移除）', !road.markings.some((m) => (m.kind as string) === 'jedge'));
 }
 
 {
@@ -323,7 +292,7 @@ ok('④ 标线全部落在车行面 / 路口内（裁剪生效）', stray <= roa
          * 才不会在接缝处露缝，这里不算"重叠"。真正要卡的是斑马线 / 停止线 /
          * 车道线 / 中心线之间不许压盖。
          */
-        const curbKinds = ['edge', 'jedge'];
+        const curbKinds = ['edge'];
         const ki = road.markings[i].kind ?? '';
         const kj = road.markings[j].kind ?? '';
         if (curbKinds.includes(ki) && curbKinds.includes(kj)) continue;
