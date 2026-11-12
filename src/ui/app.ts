@@ -101,7 +101,8 @@ interface State {
 
 const state: State = {
   seed: 682063530,
-  radius: 90,
+  // 默认调到最小规模 0.28 km（radius × 7 = 280 m）：调试/回归更快
+  radius: 40,
   style: 'structured',
   program: 'mixed',
   density: 'low',

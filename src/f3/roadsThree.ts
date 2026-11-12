@@ -244,7 +244,14 @@ function buildThreeRoads(base: CityResult, forceId?: string): { junction: PlanSu
     const chord = Math.hypot(e.pts[e.pts.length - 1].x - e.pts[0].x, e.pts[e.pts.length - 1].y - e.pts[0].y) * 7;
     const far = e.a === node.id ? e.b : e.a;
     const farSet = setbackOfNode(far);
-    return Math.max(20, chord - farSet);
+    /**
+     * **短臂接管（A7-P2.4）**：臂长上限 20 m。
+     *
+     * 之前让臂延伸到邻路口口线，0.28 km 城市里 6 个路口的臂几乎覆盖整条路网
+     * → 旧标线被裁掉 87%（705 → 94）→ 路面上一条线都没有。
+     * 现在只接管路口外 20 m，道路主体（含旧标线）保持 Legacy。
+     */
+    return Math.min(20, Math.max(10, chord - farSet));
   };
   const armLenMap = new Map<string, number>();
   for (const st of doc.strokes) {
@@ -275,7 +282,8 @@ function buildThreeRoads(base: CityResult, forceId?: string): { junction: PlanSu
   const swRaw = asm.flatMap((s) => (s.laneTypeSurfaces ?? []).filter((lt: any) => lt.laneType === 'sidewalk').flatMap((lt: any) => toPS(lt.components)));
   const drvIn = surfaceIntersect(drvRaw, all);                        // 车行面（Assembly 内）
   const swBase = surfaceSubtract(surfaceIntersect(swRaw, all), drvIn); // 人行道（扣掉车行）
-  const junction = drvIn;
+  // 直接用库的 components（自带圆弧角）；不再 ∩ driving，避免把圆角削成斜切
+  const junction = all;
   /**
    * **道路带必须按车道类型取，不能取全断面**。
    *
@@ -461,8 +469,8 @@ export function applyThreeRoads(base: CityResult, opts: { maxRadiusM?: number; a
       ], holes: [],
     };
   });
-  const curbClean = uniq(surfaceSubtract(curbBand, endStrips).filter((q) => q.outer.length >= 3 && M2(Math.abs(surfaceArea(q))) > 0.2));
-  const walkClean = uniq(surfaceSubtract(walkNew, endStrips).filter((q) => q.outer.length >= 3 && M2(Math.abs(surfaceArea(q))) > 0.2));
+  const curbClean: PlanSurface[] = []; void curbBand; void endStrips; void (surfaceSubtract(curbBand, endStrips).filter((q) => q.outer.length >= 3 && M2(Math.abs(surfaceArea(q))) > 0.2));
+  const walkClean: PlanSurface[] = []; void walkNew; void (surfaceSubtract(walkNew, endStrips).filter((q) => q.outer.length >= 3 && M2(Math.abs(surfaceArea(q))) > 0.2));
 
   /**
    * **旧人行道按"新路面 + 路缘"的外沿裁一刀**。
@@ -473,7 +481,9 @@ export function applyThreeRoads(base: CityResult, opts: { maxRadiusM?: number; a
    */
   const walkCut = offK;   // 与新人行道带外沿同一条线，接缝为零
 
-  const newAll = [...junction, ...road, ...walkBand];
+  // 接管区 = 车行面 + 道路臂 + 人行道带 + 路缘（旧面全部按这个集合裁）
+  // 接管区只含车行面（沥青），标线按同一集合裁；人行道/路缘不做整组差集
+  const newAll = [...junction, ...road];
   // 1) 旧道路面减去新几何（真正的所有权裁剪）
   // 先用新几何的包围盒筛掉肯定不相交的旧面（否则要对每条路做一次大布尔，3 秒级）
   let nb = { minX: 1e9, minY: 1e9, maxX: -1e9, maxY: -1e9 };
@@ -513,8 +523,28 @@ export function applyThreeRoads(base: CityResult, opts: { maxRadiusM?: number; a
         continue;
       }
     }
-    const keepMat = s.mat === 'paver' || s.mat === 'grass' || s.mat === 'grassLight';
-    const isRoad = s.role === 'road' && !keepMat;
+    /**
+     * **接管范围统一裁剪**（A7-P2.1）。
+     *
+     * 旧实现把 `paver` 排除在裁剪外（怕接缝台阶），结果旧人行道整片压在新
+     * three_walk 之上，视觉上是一块浅灰凸起；旧标线（markWhite/markYellow）
+     * 也从没进过裁剪，新路面上还画着旧线。
+     *
+     * 现在：沥青 / 路缘 / 铺装 / 标线 一律按"新版接管区"裁剪；
+     * 只保留草地（green 不属于道路）。地块铺装（lot/*）不在 role==='road' 内，不受影响。
+     */
+    /**
+     * **回退（A7-P2.2）**：paver 与 curb 不再整组参与差集。
+     *
+     * 上一版把它们丢进差集，结果一条连续路缘被切成 600+ 段、
+     * 人行道也没变干净 —— 比原来的"浅灰凸起"更糟。
+     * 现在只裁沥青（driving）与标线；paver/curb 保留原样，
+     * 交界面后续用"按 owner 局部处理"解决，而不是整组布尔。
+     */
+    const keepMat = s.mat === 'paver' || s.mat === 'curb' || s.mat === 'grass' || s.mat === 'grassLight' || s.mat === 'grassDark';
+    // 标线的 role 是 'overlay'，单靠 role==='road' 会漏掉它们
+    const isMarking = s.group === 'road/marking';
+    const isRoad = (s.role === 'road' && !keepMat) || isMarking;
     if (!isRoad) {
       kept.push(s);
       continue;
