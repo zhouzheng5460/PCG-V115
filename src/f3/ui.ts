@@ -6,6 +6,7 @@
 import { cityOutline, runF3City, type CityResult } from './index';
 import type { FieldGuide } from '../town/guide';
 import type { Zone } from '../town/zones';
+import { applyThreeRoads, roadsMode, TARGET_JUNCTION } from './roadsThree';
 import { applyZonesToCity } from './zoneapply';
 import type { BlockOverride, CityDensity, CityProgram, CityStyle } from './types';
 
@@ -103,10 +104,25 @@ export function f3City(inp: F3Input): CityResult {
     });
     cache = { key, result: base };
   }
-  return applyZonesToCity(base, inp.zones ?? [], {
+  const zoned = applyZonesToCity(base, inp.zones ?? [], {
     padM: inp.zonePadM ?? 6,
     padPave: inp.zonePadPave ?? true,
   });
+  /**
+   * three-roads 预览（`?f3roads=three`）。
+   *
+   * 只在这里做一次**后处理**：不动 `base` 缓存，不动 RoadGraph，
+   * 失败就打印原因并原样返回——绝不让一个路口把整座城搞没。
+   */
+  if (roadsMode() === 'three') {
+    try {
+      return applyThreeRoads(zoned);
+    } catch (e) {
+      console.error(`[f3roads] 路口 ${TARGET_JUNCTION} 预览失败，已回退旧道路：`, e);
+      return zoned;
+    }
+  }
+  return zoned;
 }
 
 export function clearF3Cache(): void {

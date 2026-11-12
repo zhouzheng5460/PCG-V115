@@ -203,6 +203,11 @@ function regenerate(msg = ''): void {
           view?.focusOn(pendingFocus.x, pendingFocus.y, pendingFocus.span, 1);
           pendingFocus = null;
         }
+        /**
+         * 给 three-roads 预览用的"一键定位"钩子。
+         * 只暴露一个函数，不碰 HUD 布局；按钮由 roadsThree.ts 自己创建。
+         */
+        (window as any).__f3FocusAt = (x: number, y: number, span = 20) => view?.focusOn(x, y, span, 1);
         if (pendingPick) {
           const id = pendingPick;
           pendingPick = null;

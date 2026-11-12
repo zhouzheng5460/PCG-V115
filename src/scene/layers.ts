@@ -38,10 +38,18 @@ function isLotRoadName(name: string): boolean {
 
 /** 一类要素 → 它的图层 id */
 export function layerOfSurface(s: SurfaceFeature): LayerId {
+  /**
+   * **路缘一律进「路缘石」层**（新旧都算）。
+   *
+   * 旧实现把路缘按 group 归到「人行道」，于是新路口的路缘能单独关、旧路缘关不掉。
+   * 这里按材质先拦一道：路缘是 0.3~0.4 m 的窄条，视觉与语义都该独立控制。
+   */
+  if (s.mat === 'curb') return 'road:curb';
   const g = s.group;
   if (g === 'ground') return 'surface:ground';
   if (g === 'road/surface') return 'road:asphalt';
   if (g === 'road/sidewalk') return 'road:walk';
+  if (g === 'road/curb') return 'road:curb';
   if (g === 'road/verge') return 'road:verge';
   if (g === 'road/junction') return 'road:junction';
   if (g === 'road/marking') return 'road:mark';
@@ -154,6 +162,7 @@ export const LAYER_GROUPS: LayerGroupDef[] = [
     items: [
       { id: 'road:asphalt', label: '车行道', color: '#3e424a' },
       { id: 'road:walk', label: '人行道', color: '#a9a49b' },
+      { id: 'road:curb', label: '路缘石', color: '#8a6f4a' },
       { id: 'road:verge', label: '路侧绿带', color: '#5c8045' },
       { id: 'road:junction', label: '路口铺装', color: '#4a4e57' },
       { id: 'road:mark', label: '道路标线', color: '#eae6da' },
